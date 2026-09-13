@@ -4,7 +4,9 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,6 +23,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.grant.routecollector.data.*
+import com.grant.routecollector.service.CollectorOverlayService
 import com.grant.routecollector.service.DriveTrackingService
 import com.grant.routecollector.ui.RouteMap
 import com.grant.routecollector.voice.VoiceMarker
@@ -28,7 +31,6 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
-
 
 class MainActivity : ComponentActivity() {
     private val dao by lazy { AppDatabase.get(this).dao() }
@@ -57,31 +59,13 @@ class MainActivity : ComponentActivity() {
             "school" in lower -> "school_zone"
             else -> "note"
         }
-        dao.insertMarker(
-            MarkerEntity(
-                driveId = driveId,
-                timestamp = System.currentTimeMillis(),
-                latitude = point.latitude,
-                longitude = point.longitude,
-                kind = kind,
-                note = note
-            )
-        )
+        dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = kind, note = note))
     }
 
     suspend fun saveQuickMarker(kind: String, note: String) {
         val driveId = TrackingState.activeDriveId.value ?: return
         val point = dao.latestPoint(driveId) ?: return
-        dao.insertMarker(
-            MarkerEntity(
-                driveId = driveId,
-                timestamp = System.currentTimeMillis(),
-                latitude = point.latitude,
-                longitude = point.longitude,
-                kind = kind,
-                note = note
-            )
-        )
+        dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = kind, note = note))
     }
 }
 
@@ -96,18 +80,12 @@ private fun RouteCollectorScreen(activity: MainActivity) {
     var selectedDriveId by remember { mutableStateOf<Long?>(null) }
 
     val effectiveDriveId = activeDriveId ?: selectedDriveId
-    val pointsFlow = remember(effectiveDriveId) {
-        effectiveDriveId?.let { dao.observePoints(it) } ?: flowOf(emptyList())
-    }
-    val markersFlow = remember(effectiveDriveId) {
-        effectiveDriveId?.let { dao.observeMarkers(it) } ?: flowOf(emptyList())
-    }
+    val pointsFlow = remember(effectiveDriveId) { effectiveDriveId?.let { dao.observePoints(it) } ?: flowOf(emptyList()) }
+    val markersFlow = remember(effectiveDriveId) { effectiveDriveId?.let { dao.observeMarkers(it) } ?: flowOf(emptyList()) }
     val points by pointsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val markers by markersFlow.collectAsStateWithLifecycle(initialValue = emptyList())
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
 
     LaunchedEffect(Unit) {
         val wanted = buildList {
@@ -118,63 +96,50 @@ private fun RouteCollectorScreen(activity: MainActivity) {
         if (wanted.isNotEmpty()) permissionLauncher.launch(wanted.toTypedArray())
     }
 
-    Scaffold(
-        topBar = { TopAppBar(title = { Text("Route Collector") }) }
-    ) { padding ->
-        Column(
-            Modifier
-                .padding(padding)
-                .padding(12.dp)
-                .fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
+    fun launchMapsWithOverlay() {
+        if (!Settings.canDrawOverlays(context)) {
+            context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
+            return
+        }
+        context.startService(Intent(context, CollectorOverlayService::class.java).apply { action = CollectorOverlayService.ACTION_SHOW })
+        val mapsIntent = context.packageManager.getLaunchIntentForPackage("com.google.android.apps.maps")
+        if (mapsIntent != null) context.startActivity(mapsIntent)
+        else context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0")))
+    }
+
+    Scaffold(topBar = { TopAppBar(title = { Text("Route Collector") }) }) { padding ->
+        Column(Modifier.padding(padding).padding(12.dp).fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             RouteMap(points = points, markers = markers, modifier = Modifier.fillMaxWidth().weight(1f))
 
             if (activeDriveId == null) {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            val id = dao.insertDrive(DriveEntity(startedAt = System.currentTimeMillis()))
-                            selectedDriveId = id
-                            val intent = Intent(context, DriveTrackingService::class.java).apply {
-                                action = DriveTrackingService.ACTION_START
-                                putExtra(DriveTrackingService.EXTRA_DRIVE_ID, id)
-                            }
-                            ContextCompat.startForegroundService(context, intent)
+                Button(onClick = {
+                    scope.launch {
+                        val id = dao.insertDrive(DriveEntity(startedAt = System.currentTimeMillis()))
+                        selectedDriveId = id
+                        val intent = Intent(context, DriveTrackingService::class.java).apply {
+                            action = DriveTrackingService.ACTION_START
+                            putExtra(DriveTrackingService.EXTRA_DRIVE_ID, id)
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Start drive") }
+                        ContextCompat.startForegroundService(context, intent)
+                    }
+                }, modifier = Modifier.fillMaxWidth()) { Text("Start drive") }
             } else {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { scope.launch { activity.saveQuickMarker("camera", "Camera intersection") } },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Mark camera") }
-                    Button(
-                        onClick = { VoiceMarker.start(activity) },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Voice marker") }
+                    Button(onClick = { scope.launch { activity.saveQuickMarker("camera", "Camera intersection") } }, modifier = Modifier.weight(1f)) { Text("Mark camera") }
+                    Button(onClick = { VoiceMarker.start(activity) }, modifier = Modifier.weight(1f)) { Text("Voice marker") }
                 }
-                Button(
-                    onClick = {
-                        context.startService(Intent(context, DriveTrackingService::class.java).apply {
-                            action = DriveTrackingService.ACTION_STOP
-                        })
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Stop drive") }
+                Button(onClick = { launchMapsWithOverlay() }, modifier = Modifier.fillMaxWidth()) { Text("Open Google Maps + overlay") }
+                Button(onClick = {
+                    context.startService(Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_STOP })
+                    context.stopService(Intent(context, CollectorOverlayService::class.java))
+                }, modifier = Modifier.fillMaxWidth()) { Text("Stop drive") }
             }
 
             Text("Recorded drives", style = MaterialTheme.typography.titleMedium)
             LazyColumn(Modifier.heightIn(max = 180.dp)) {
                 items(drives, key = { it.id }) { drive ->
-                    TextButton(
-                        onClick = { selectedDriveId = drive.id },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        val started = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
-                            .format(Date(drive.startedAt))
+                    TextButton(onClick = { selectedDriveId = drive.id }, modifier = Modifier.fillMaxWidth()) {
+                        val started = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(drive.startedAt))
                         Text("$started  •  ${if (drive.endedAt == null) "recording" else "saved"}")
                     }
                 }

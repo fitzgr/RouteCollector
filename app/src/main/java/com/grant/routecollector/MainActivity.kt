@@ -1,12 +1,12 @@
 package com.grant.routecollector
 
 import android.Manifest
-import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.speech.RecognizerIntent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,7 +21,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.lifecycleScope
 import com.grant.routecollector.data.*
 import com.grant.routecollector.service.CollectorOverlayService
 import com.grant.routecollector.service.DriveTrackingService
@@ -40,16 +39,7 @@ class MainActivity : ComponentActivity() {
         setContent { MaterialTheme { RouteCollectorScreen(this) } }
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == VoiceMarker.REQUEST_CODE && resultCode == Activity.RESULT_OK) {
-            val words = data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
-            val note = words?.firstOrNull()?.trim().orEmpty()
-            if (note.isNotBlank()) lifecycleScope.launch { saveMarkerFromLatest(note) }
-        }
-    }
-
-    private suspend fun saveMarkerFromLatest(note: String) {
+    suspend fun saveMarkerFromLatest(note: String) {
         val driveId = TrackingState.activeDriveId.value ?: return
         val point = dao.latestPoint(driveId) ?: return
         val lower = note.lowercase()
@@ -86,6 +76,13 @@ private fun RouteCollectorScreen(activity: MainActivity) {
     val markers by markersFlow.collectAsStateWithLifecycle(initialValue = emptyList())
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+    val voiceMarkerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val words = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+        val note = words?.firstOrNull()?.trim().orEmpty()
+        if (note.isNotBlank()) {
+            scope.launch { activity.saveMarkerFromLatest(note) }
+        }
+    }
 
     LaunchedEffect(Unit) {
         val wanted = buildList {
@@ -126,7 +123,7 @@ private fun RouteCollectorScreen(activity: MainActivity) {
             } else {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { scope.launch { activity.saveQuickMarker("camera", "Camera intersection") } }, modifier = Modifier.weight(1f)) { Text("Mark camera") }
-                    Button(onClick = { VoiceMarker.start(activity) }, modifier = Modifier.weight(1f)) { Text("Voice marker") }
+                    Button(onClick = { voiceMarkerLauncher.launch(VoiceMarker.createIntent()) }, modifier = Modifier.weight(1f)) { Text("Voice marker") }
                 }
                 Button(onClick = { launchMapsWithOverlay() }, modifier = Modifier.fillMaxWidth()) { Text("Open Google Maps + overlay") }
                 Button(onClick = {

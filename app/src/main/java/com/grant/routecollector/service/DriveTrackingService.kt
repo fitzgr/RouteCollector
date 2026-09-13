@@ -40,7 +40,6 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
     private var ttsReady = false
 
-    // A marker can have two distinct announcements: an advance reduction warning and its active-zone announcement.
     private val warnedReductionMarkerIds = mutableSetOf<Long>()
     private val announcedMarkerIds = mutableSetOf<Long>()
     private val previousMarkerDistances = mutableMapOf<Long, Float>()
@@ -152,7 +151,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         val current = currentSpeedLimit
 
         // Advance warnings are intentionally asymmetric: warn before a reduction, but not before an increase.
-        // We also require the marker to be getting closer to reduce warnings from nearby/behind markers.
+        // Keep the spoken/visual prompt concise; the trigger distance remains an internal implementation detail.
         if (
             current != null &&
             targetSpeed < current &&
@@ -162,11 +161,9 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             distance > ACTIVE_ZONE_RADIUS_METRES
         ) {
             warnedReductionMarkerIds += fact.id
-            val roundedDistance = ((distance / 50f).toInt().coerceAtLeast(1) * 50)
-            speak("Speed reduction to $targetSpeed in about $roundedDistance metres")
+            speak("Speed reduction to $targetSpeed")
         }
 
-        // At the collected boundary, announce both increases and reductions and make the new zone current.
         if (
             fact.id !in announcedMarkerIds &&
             approaching &&

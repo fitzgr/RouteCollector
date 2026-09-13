@@ -74,7 +74,7 @@ Visual alerts use a dark overlay and do not intentionally wake or brighten the s
 
 The current export includes drives, GPS breadcrumb points, and markers in `routecollector-export-v1` JSON format. This is the first step toward backup/import/community sharing.
 
-Cloud synchronization, multi-user merge rules, confidence scoring, and shared-vs-private layers are intentionally not enabled yet. Those need a small backend and conflict/data-quality rules so one user's observation cannot silently overwrite another user's verified road fact.
+Cloud synchronization, multi-user merge rules, confidence scoring, and shared-vs-private layers are intentionally deferred. They are tracked in `BACKLOG.md` so the current work can stay focused on reliable local collection and road testing.
 
 ## Map display
 
@@ -88,7 +88,7 @@ Recorded drives are displayed on OpenStreetMap. Red light camera markers use a d
 
 Older `camera` and `school_zone` marker types remain readable for compatibility with data collected in earlier builds.
 
-## Build/install
+## Local build/install
 
 1. Open the `RouteCollector` project in Android Studio.
 2. Use JDK 17.
@@ -106,6 +106,35 @@ Older `camera` and `school_zone` marker types remain readable for compatibility 
 
 The app targets Android 10+ (API 29+) and compile/target SDK 35.
 
+## GitHub Actions cloud build
+
+The repository includes `.github/workflows/android-debug-apk.yml`.
+
+It builds the debug APK automatically when code is pushed to `main` or `feature/google-maps-overlay`, and it can also be started manually from the GitHub **Actions** tab using **Run workflow**.
+
+The workflow:
+
+1. checks out the repository on a clean Ubuntu runner;
+2. installs Temurin JDK 17;
+3. restores/caches Gradle dependencies;
+4. runs `./gradlew assembleDebug`;
+5. uploads `app-debug.apk` as the artifact **routecollector-debug-apk** for 14 days.
+
+This means the Android SDK libraries and Gradle dependencies do not need to come from the development laptop; the GitHub runner downloads the versions declared by the project.
+
+### Installing a cloud-built APK
+
+When the workflow finishes:
+
+1. Open the repository on GitHub.
+2. Open **Actions**.
+3. Open the successful **Build Android Debug APK** run.
+4. Download the **routecollector-debug-apk** artifact.
+5. Unzip it and open `app-debug.apk` on the Android phone while parked/not driving.
+6. Android may ask for permission to install apps from the browser/files app used to open the APK.
+
+The USB/ADB flow remains available at home for faster development; GitHub Actions is the cable-free build path.
+
 ## Stack
 
 - Kotlin
@@ -117,6 +146,7 @@ The app targets Android 10+ (API 29+) and compile/target SDK 35.
 - Android audio focus for spoken acknowledgements
 - osmdroid / OpenStreetMap
 - OpenStreetMap Overpass API for intersection snapping
+- GitHub Actions for cloud debug APK builds
 
 ## Important phone settings
 
@@ -124,12 +154,11 @@ Samsung can aggressively sleep apps. For reliable recording, set Route Collector
 
 ## Planned next steps
 
-- GitHub Actions cloud APK builds for cable-free testing.
 - Import of exported Route Collector JSON.
-- Optional cloud backup and community data sharing.
-- Shared-data merge/confidence rules.
-- Direction-aware route profiles and approach points.
-- OpenPilot/Comma consumer for dynamic cruise-control targets.
+- Direction-aware road facts and route profiles.
+- Better wake-word / in-car microphone behavior with music playing.
+- OpenPilot/Comma consumer for route-aware speed targets.
+- Cloud/community work is tracked separately in `BACKLOG.md`.
 
 ## Safety
 

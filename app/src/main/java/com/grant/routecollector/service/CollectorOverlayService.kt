@@ -1,10 +1,21 @@
 package com.grant.routecollector.service
 
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -38,15 +49,40 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     private var ttsReady = false
     private var highwayMode = true
 
+    private lateinit var audioManager: AudioManager
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private var speechRecognizer: SpeechRecognizer? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var handsFreeEnabled = true
+    private var suppressRestartUntilSpeechDone = false
+    private var listeningStatus: TextView? = null
+
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         tts = TextToSpeech(this, this)
+        setupSpeechRecognizer()
     }
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             tts?.language = Locale.CANADA
+            tts?.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) = Unit
+                override fun onError(utteranceId: String?) {
+                    releaseAudioFocusAndResumeListening()
+                }
+                override fun onDone(utteranceId: String?) {
+                    releaseAudioFocusAndResumeListening()
+                }
+            })
             ttsReady = true
         }
     }
@@ -65,13 +101,24 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(18, 12, 18, 12)
-            setBackgroundColor(0xDD202124.toInt())
+            setBackgroundColor(0xE6202124.toInt())
         }
         val title = TextView(this).apply {
             text = "Route Collector"
             setTextColor(0xFFFFFFFF.toInt())
-            textSize = 14f
+            textSize = 15f
         }
+        listeningStatus = TextView(this).apply {
+            text = "Hands-free: starting…"
+            setTextColor(0xFFB8E986.toInt())
+            textSize = 13f
+        }
+        val help = TextView(this).apply {
+            text = "Say: Speed 60 • School start • School end\nCamera • Undo"
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 12f
+        }
+        val handsFree = Button(this).apply { text = "Hands-free: ON" }
         val mode = Button(this).apply { text = "Mode: Highway" }
         val speedChange = Button(this).apply { text = "Mark speed change" }
         val speedGrid = GridLayout(this).apply {
@@ -81,10 +128,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         val camera = Button(this).apply { text = "Mark camera" }
         val schoolStart = Button(this).apply { text = "School zone start" }
         val schoolEnd = Button(this).apply { text = "School zone end" }
-        val undoCamera = Button(this).apply {
-            text = "Undo camera"
-            isEnabled = false
-        }
+        val undo = Button(this).apply { text = "Undo last marker" }
         val hide = Button(this).apply {
             text = "Hide"
             setOnClickListener { stopSelf() }
@@ -98,7 +142,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
                     text = speed.toString()
                     setOnClickListener {
                         saveRoadFact("speed", "Speed limit $speed") {
-                            speak("Speed $speed marked")
+                            acknowledge("$speed kilometre zone marked")
                             speedGrid.visibility = View.GONE
                         }
                     }
@@ -107,11 +151,22 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
             }
         }
 
+        handsFree.setOnClickListener {
+            handsFreeEnabled = !handsFreeEnabled
+            handsFree.text = if (handsFreeEnabled) "Hands-free: ON" else "Hands-free: OFF"
+            if (handsFreeEnabled) {
+                listeningStatus?.text = "Hands-free: listening"
+                startListeningSoon(150)
+            } else {
+                speechRecognizer?.cancel()
+                listeningStatus?.text = "Hands-free: off"
+            }
+        }
         mode.setOnClickListener {
             highwayMode = !highwayMode
             mode.text = if (highwayMode) "Mode: Highway" else "Mode: Local"
             rebuildSpeedButtons()
-            speak(if (highwayMode) "Highway speed capture" else "Local road speed capture")
+            acknowledge(if (highwayMode) "Highway mode" else "Local road mode")
         }
         speedChange.setOnClickListener {
             if (speedGrid.visibility == View.VISIBLE) {
@@ -119,34 +174,31 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
             } else {
                 rebuildSpeedButtons()
                 speedGrid.visibility = View.VISIBLE
-                speak("Select new posted speed")
+                acknowledge("Select new posted speed")
             }
         }
         camera.setOnClickListener {
-            saveRoadFact("camera", "Camera intersection") {
-                undoCamera.isEnabled = true
-                speak("Camera marked")
-            }
+            saveRoadFact("camera", "Camera intersection") { acknowledge("Camera marked") }
         }
         schoolStart.setOnClickListener {
-            saveRoadFact("school_zone_start", "School zone start") { speak("School zone start marked") }
+            saveRoadFact("school_zone_start", "School zone start") { acknowledge("School zone start marked") }
         }
         schoolEnd.setOnClickListener {
-            saveRoadFact("school_zone_end", "School zone end") { speak("School zone end marked") }
+            saveRoadFact("school_zone_end", "School zone end") { acknowledge("School zone end marked") }
         }
-        undoCamera.setOnClickListener {
-            undoLatestCameraMarker()
-            undoCamera.isEnabled = false
-        }
+        undo.setOnClickListener { undoLatestMarker() }
 
         panel.addView(title)
+        panel.addView(listeningStatus)
+        panel.addView(help)
+        panel.addView(handsFree)
         panel.addView(mode)
         panel.addView(speedChange)
         panel.addView(speedGrid)
         panel.addView(camera)
         panel.addView(schoolStart)
         panel.addView(schoolEnd)
-        panel.addView(undoCamera)
+        panel.addView(undo)
         panel.addView(hide)
 
         val params = WindowManager.LayoutParams(
@@ -158,7 +210,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         ).apply {
             gravity = Gravity.TOP or Gravity.END
             x = 20
-            y = 180
+            y = 150
         }
 
         var startX = 0
@@ -186,12 +238,108 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
 
         overlayView = panel
         windowManager.addView(panel, params)
+        if (handsFreeEnabled) startListeningSoon(300)
+    }
+
+    private fun setupSpeechRecognizer() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) return
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+            setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {
+                    listeningStatus?.text = "Hands-free: listening"
+                }
+                override fun onBeginningOfSpeech() {
+                    listeningStatus?.text = "Hands-free: hearing you…"
+                }
+                override fun onRmsChanged(rmsdB: Float) = Unit
+                override fun onBufferReceived(buffer: ByteArray?) = Unit
+                override fun onEndOfSpeech() {
+                    listeningStatus?.text = "Hands-free: processing…"
+                }
+                override fun onError(error: Int) {
+                    if (handsFreeEnabled && !suppressRestartUntilSpeechDone) startListeningSoon(700)
+                }
+                override fun onResults(results: Bundle?) {
+                    val phrases = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
+                    val handled = phrases.firstNotNullOfOrNull { parseVoiceCommand(it) }
+                    if (handled == null && handsFreeEnabled && !suppressRestartUntilSpeechDone) startListeningSoon(500)
+                }
+                override fun onPartialResults(partialResults: Bundle?) = Unit
+                override fun onEvent(eventType: Int, params: Bundle?) = Unit
+            })
+        }
+    }
+
+    private fun startListeningSoon(delayMs: Long) {
+        mainHandler.removeCallbacksAndMessages(null)
+        mainHandler.postDelayed({
+            if (!handsFreeEnabled || suppressRestartUntilSpeechDone || overlayView == null) return@postDelayed
+            val recognizer = speechRecognizer ?: return@postDelayed
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.CANADA.toLanguageTag())
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+            }
+            try {
+                recognizer.startListening(intent)
+            } catch (_: Exception) {
+                startListeningSoon(1000)
+            }
+        }, delayMs)
+    }
+
+    private fun parseVoiceCommand(raw: String): String? {
+        val command = raw.lowercase(Locale.CANADA).trim()
+        val speed = extractSpeed(command)
+        if (("speed" in command || command.startsWith("mark ")) && speed != null) {
+            performVoiceSave("speed", "Speed limit $speed", "$speed kilometre zone marked")
+            return "speed"
+        }
+        if ("school" in command && ("start" in command || "begin" in command || "enter" in command)) {
+            performVoiceSave("school_zone_start", "School zone start", "School zone start marked")
+            return "school_start"
+        }
+        if ("school" in command && ("end" in command || "exit" in command || "leave" in command)) {
+            performVoiceSave("school_zone_end", "School zone end", "School zone end marked")
+            return "school_end"
+        }
+        if (command == "camera" || "mark camera" in command || "camera intersection" in command) {
+            performVoiceSave("camera", "Camera intersection", "Camera marked")
+            return "camera"
+        }
+        if ("undo" in command || "remove last" in command || "delete last" in command) {
+            suppressRestartUntilSpeechDone = true
+            speechRecognizer?.cancel()
+            undoLatestMarker()
+            return "undo"
+        }
+        return null
+    }
+
+    private fun extractSpeed(command: String): Int? {
+        val allowed = listOf(30, 40, 50, 60, 70, 80, 90, 100, 110)
+        Regex("\\b(30|40|50|60|70|80|90|100|110)\\b").find(command)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
+        val words = mapOf(
+            "thirty" to 30, "forty" to 40, "fifty" to 50, "sixty" to 60,
+            "seventy" to 70, "eighty" to 80, "ninety" to 90,
+            "one hundred" to 100, "hundred" to 100, "one ten" to 110,
+            "one hundred ten" to 110, "one hundred and ten" to 110
+        )
+        return words.entries.firstOrNull { (word, value) -> value in allowed && word in command }?.value
+    }
+
+    private fun performVoiceSave(kind: String, note: String, confirmation: String) {
+        suppressRestartUntilSpeechDone = true
+        speechRecognizer?.cancel()
+        saveRoadFact(kind, note) { acknowledge(confirmation) }
     }
 
     private fun saveRoadFact(kind: String, note: String, onSaved: () -> Unit = {}) {
         val driveId = TrackingState.activeDriveId.value
         if (driveId == null) {
             Toast.makeText(this, "Start a drive in Route Collector first", Toast.LENGTH_SHORT).show()
+            acknowledge("No active drive")
             return
         }
         scope.launch {
@@ -199,6 +347,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
             if (point == null) {
                 launch(Dispatchers.Main) {
                     Toast.makeText(this@CollectorOverlayService, "Waiting for GPS", Toast.LENGTH_SHORT).show()
+                    acknowledge("Waiting for GPS")
                 }
                 return@launch
             }
@@ -219,28 +368,55 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun undoLatestCameraMarker() {
+    private fun undoLatestMarker() {
         val driveId = TrackingState.activeDriveId.value
         if (driveId == null) {
-            Toast.makeText(this, "No active drive", Toast.LENGTH_SHORT).show()
+            acknowledge("No active drive")
             return
         }
         scope.launch {
-            val deleted = dao.deleteLatestCameraMarker(driveId)
+            val deleted = dao.deleteLatestMarker(driveId)
             launch(Dispatchers.Main) {
-                Toast.makeText(
-                    this@CollectorOverlayService,
-                    if (deleted > 0) "Last camera marker removed" else "No camera marker to remove",
-                    Toast.LENGTH_SHORT
-                ).show()
-                if (deleted > 0) speak("Camera marker removed")
+                acknowledge(if (deleted > 0) "Last marker removed" else "No marker to remove")
             }
         }
     }
 
-    private fun speak(text: String) {
-        if (!ttsReady) return
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "overlay-${System.currentTimeMillis()}")
+    private fun acknowledge(text: String) {
+        suppressRestartUntilSpeechDone = true
+        speechRecognizer?.cancel()
+        if (!ttsReady) {
+            suppressRestartUntilSpeechDone = false
+            if (handsFreeEnabled) startListeningSoon(500)
+            return
+        }
+        requestTransientAudioFocus()
+        val utteranceId = "overlay-${System.currentTimeMillis()}"
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+    }
+
+    private fun requestTransientAudioFocus() {
+        audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setOnAudioFocusChangeListener { }
+            .build()
+        audioFocusRequest = request
+        audioManager.requestAudioFocus(request)
+    }
+
+    private fun releaseAudioFocusAndResumeListening() {
+        mainHandler.post {
+            audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+            audioFocusRequest = null
+            suppressRestartUntilSpeechDone = false
+            if (handsFreeEnabled) startListeningSoon(450)
+        }
     }
 
     private fun hideOverlay() {
@@ -248,10 +424,18 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
+        handsFreeEnabled = false
+        mainHandler.removeCallbacksAndMessages(null)
+        speechRecognizer?.cancel()
+        speechRecognizer?.destroy()
+        speechRecognizer = null
         overlayView?.let { windowManager.removeView(it) }
         overlayView = null
+        listeningStatus = null
         tts?.stop()
         tts?.shutdown()
+        audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+        audioFocusRequest = null
         scope.cancel()
         super.onDestroy()
     }

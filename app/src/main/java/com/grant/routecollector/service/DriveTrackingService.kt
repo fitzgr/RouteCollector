@@ -31,6 +31,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val NOTIFICATION_ID = 101
         private const val ACTIVE_ZONE_RADIUS_METRES = 70f
         private const val REDUCTION_WARNING_RADIUS_METRES = 300f
+        private const val PREFS = "routecollector_overlay"
+        private const val PREF_CAMERA_WARNING_METRES = "red_light_camera_warning_metres"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -42,6 +44,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
 
     private val warnedReductionMarkerIds = mutableSetOf<Long>()
     private val announcedMarkerIds = mutableSetOf<Long>()
+    private val warnedCameraMarkerIds = mutableSetOf<Long>()
+    private val verifiedCameraMarkerIds = mutableSetOf<Long>()
     private val previousMarkerDistances = mutableMapOf<Long, Float>()
     private var currentSpeedLimit: Int? = null
 
@@ -89,6 +93,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
                 driveId?.let {
                     warnedReductionMarkerIds.clear()
                     announcedMarkerIds.clear()
+                    warnedCameraMarkerIds.clear()
+                    verifiedCameraMarkerIds.clear()
                     previousMarkerDistances.clear()
                     currentSpeedLimit = null
                     TrackingState.activeDriveId.value = it
@@ -103,7 +109,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
 
     private fun beginUpdates() {
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            stopSelf(); return
+            stopSelf()
+            return
         }
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2_000L)
             .setMinUpdateDistanceMeters(5f)
@@ -114,34 +121,22 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
 
     private suspend fun announceNearbyRoadFacts(location: Location) {
         val facts = dao.getSpokenRoadFacts()
+        val cameraWarningMetres = getSharedPreferences(PREFS, MODE_PRIVATE)
+            .getInt(PREF_CAMERA_WARNING_METRES, 200)
+            .toFloat()
+
         for (fact in facts) {
             val distanceResult = FloatArray(1)
-            Location.distanceBetween(
-                location.latitude,
-                location.longitude,
-                fact.latitude,
-                fact.longitude,
-                distanceResult
-            )
+            Location.distanceBetween(location.latitude, location.longitude, fact.latitude, fact.longitude, distanceResult)
             val distance = distanceResult[0]
             val previousDistance = previousMarkerDistances[fact.id]
             val approaching = previousDistance == null || distance < previousDistance
             previousMarkerDistances[fact.id] = distance
 
-            if (fact.kind == "speed") {
-                handleSpeedFact(fact, distance, approaching)
-                continue
-            }
-
-            if (fact.id in announcedMarkerIds || !approaching || distance > ACTIVE_ZONE_RADIUS_METRES) continue
-            val phrase = when (fact.kind) {
-                "school_zone", "school_zone_start" -> "Entering school zone"
-                "school_zone_end" -> "Leaving school zone"
-                else -> null
-            }
-            if (phrase != null) {
-                announcedMarkerIds += fact.id
-                speak(phrase)
+            when (fact.kind) {
+                "speed" -> handleSpeedFact(fact, distance, approaching)
+                "red_light_camera" -> handleRedLightCamera(fact, distance, approaching, cameraWarningMetres)
+                else -> handleZoneFact(fact, distance, approaching)
             }
         }
     }
@@ -149,38 +144,51 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private fun handleSpeedFact(fact: MarkerEntity, distance: Float, approaching: Boolean) {
         val targetSpeed = parseSpeed(fact.note) ?: return
         val current = currentSpeedLimit
-
-        // Advance warnings are intentionally asymmetric: warn before a reduction, but not before an increase.
-        // Keep the spoken/visual prompt concise; the trigger distance remains an internal implementation detail.
         if (
-            current != null &&
-            targetSpeed < current &&
-            fact.id !in warnedReductionMarkerIds &&
-            approaching &&
-            distance <= REDUCTION_WARNING_RADIUS_METRES &&
-            distance > ACTIVE_ZONE_RADIUS_METRES
+            current != null && targetSpeed < current && fact.id !in warnedReductionMarkerIds &&
+            approaching && distance <= REDUCTION_WARNING_RADIUS_METRES && distance > ACTIVE_ZONE_RADIUS_METRES
         ) {
             warnedReductionMarkerIds += fact.id
             speak("Speed reduction to $targetSpeed")
         }
-
-        if (
-            fact.id !in announcedMarkerIds &&
-            approaching &&
-            distance <= ACTIVE_ZONE_RADIUS_METRES
-        ) {
+        if (fact.id !in announcedMarkerIds && approaching && distance <= ACTIVE_ZONE_RADIUS_METRES) {
             announcedMarkerIds += fact.id
             currentSpeedLimit = targetSpeed
             speak("$targetSpeed kilometre zone active")
         }
     }
 
+    private fun handleZoneFact(fact: MarkerEntity, distance: Float, approaching: Boolean) {
+        if (fact.id in announcedMarkerIds || !approaching || distance > ACTIVE_ZONE_RADIUS_METRES) return
+        val phrase = when (fact.kind) {
+            "community_safety_zone_start" -> "Entering community safety zone"
+            "community_safety_zone_end" -> "Leaving community safety zone"
+            "senior_safety_zone_start" -> "Entering senior safety zone"
+            "senior_safety_zone_end" -> "Leaving senior safety zone"
+            else -> null
+        } ?: return
+        announcedMarkerIds += fact.id
+        speak(phrase)
+    }
+
+    private fun handleRedLightCamera(fact: MarkerEntity, distance: Float, approaching: Boolean, warningMetres: Float) {
+        if (approaching && distance <= warningMetres && distance > ACTIVE_ZONE_RADIUS_METRES && fact.id !in warnedCameraMarkerIds) {
+            warnedCameraMarkerIds += fact.id
+            speak("Red light camera ahead")
+        }
+        if (approaching && distance <= ACTIVE_ZONE_RADIUS_METRES && fact.id !in verifiedCameraMarkerIds) {
+            verifiedCameraMarkerIds += fact.id
+            TrackingState.postDriverAlert(
+                text = "Red light camera here — keep or remove?",
+                kind = "red_light_camera_verify",
+                markerId = fact.id
+            )
+        }
+    }
+
     private fun parseSpeed(note: String): Int? =
         Regex("\\b(20|30|40|50|60|70|80|90|100|110|120)\\b")
-            .find(note)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.toIntOrNull()
+            .find(note)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
     private fun speak(text: String) {
         TrackingState.postDriverAlert(text)
@@ -193,8 +201,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         val id = driveId
         if (id != null) {
             scope.launch {
-                val drive = dao.getDrive(id)
-                if (drive != null) dao.updateDrive(drive.copy(endedAt = System.currentTimeMillis()))
+                dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) }
             }
         }
         driveId = null

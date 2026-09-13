@@ -163,3 +163,5 @@ Samsung can aggressively sleep apps. For reliable recording, set Route Collector
 ## Safety
 
 Do not interact with the phone while driving. Hands-free commands and passive alerts are intended to reduce interaction, but the driver remains responsible for road conditions, legal speed, traffic signals, braking decisions, and safe vehicle operation. Route Collector alerts are informational only.
+
+<!-- Notification test: 2026-09-13 -->

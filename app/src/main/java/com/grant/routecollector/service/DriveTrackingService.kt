@@ -138,6 +138,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun speak(text: String) {
+        TrackingState.postDriverAlert(text)
         if (!ttsReady) return
         tts?.speak(text, TextToSpeech.QUEUE_ADD, null, "routecollector-${System.currentTimeMillis()}")
     }

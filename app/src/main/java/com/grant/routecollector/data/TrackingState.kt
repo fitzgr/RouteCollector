@@ -13,6 +13,8 @@ object TrackingState {
     val activeDriveId = MutableStateFlow<Long?>(null)
     val latestLat = MutableStateFlow<Double?>(null)
     val latestLon = MutableStateFlow<Double?>(null)
+    val latestSpeedKph = MutableStateFlow<Float?>(null)
+    val currentPostedSpeed = MutableStateFlow<Int?>(null)
     val driverAlert = MutableStateFlow<DriverAlert?>(null)
 
     fun postDriverAlert(text: String, kind: String = "info", markerId: Long? = null) {

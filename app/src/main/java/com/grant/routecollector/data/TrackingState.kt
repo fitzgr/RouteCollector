@@ -4,6 +4,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 
 data class DriverAlert(
     val text: String,
+    val kind: String = "info",
+    val markerId: Long? = null,
     val timestamp: Long = System.currentTimeMillis()
 )
 
@@ -13,7 +15,7 @@ object TrackingState {
     val latestLon = MutableStateFlow<Double?>(null)
     val driverAlert = MutableStateFlow<DriverAlert?>(null)
 
-    fun postDriverAlert(text: String) {
-        driverAlert.value = DriverAlert(text)
+    fun postDriverAlert(text: String, kind: String = "info", markerId: Long? = null) {
+        driverAlert.value = DriverAlert(text = text, kind = kind, markerId = markerId)
     }
 }

@@ -13,7 +13,7 @@ Route Collector records verified road facts on repeat routes so they can later d
 
 ```text
 <command> ::= Route <action>
-<action>  ::= Speed <limit>
+<action>  ::= Speed <limit> [ahead]
             | Red light camera
             | Community safety zone <start|end>
             | Senior safety zone <start|end>
@@ -23,7 +23,7 @@ Route Collector records verified road facts on repeat routes so they can later d
 Examples:
 
 - `Route speed 50`
-- `Route speed 80`
+- `Route speed 60 ahead`
 - `Route red light camera`
 - `Route community safety zone start`
 - `Route community safety zone end`
@@ -31,7 +31,40 @@ Examples:
 - `Route senior safety zone end`
 - `Route undo`
 
-The **Route** prefix acts as a lightweight wake phrase. Speech without that prefix is ignored by the command parser, which helps reduce false commands from music or conversation.
+The **Route** prefix acts as a lightweight wake phrase. Speech without that prefix is ignored by the command parser.
+
+## Compact driving overlay
+
+The Google Maps overlay has been tightened for road testing. It shows:
+
+- **Posted** speed and current **Actual** GPS speed.
+- A warning indicator when actual speed is above the configured tolerance for that posted speed.
+- Compact hands-free, red-light-camera and speed-marker controls.
+- **Community safety zone** and **Senior safety zone** on one line each, with separate start/end icon buttons.
+- Collapsible **Speed** and **⚙ Settings** panels.
+
+## Speed-zone collection
+
+The **Speed** panel lets a tester select:
+
+1. the posted speed;
+2. whether the observation is the **Zone begins** point or an **Advance sign**;
+3. **Set** to save the current GPS position.
+
+`speed` markers represent the actual start of the posted zone. `speed_advance` markers retain the location of an advance warning sign so route profiling can later use the sign position separately from the zone boundary.
+
+A normal voice command such as `Route speed 60` marks the zone start. `Route speed 60 ahead` marks an advance sign.
+
+## Posted versus actual speed
+
+The overlay reads observed speed from the phone GPS and compares it with the current posted zone.
+
+The default visual-warning tolerances are:
+
+- posted speed below 100 km/h: **+8 km/h**;
+- posted speed 100 km/h or higher: **+9 km/h**.
+
+These are only warning thresholds; they do not control the vehicle. Each common posted speed has its own user-editable tolerance under **⚙ Settings**, adjustable without rebuilding the app.
 
 ## Driver alerts
 
@@ -52,29 +85,30 @@ Speed reductions get an advance warning. Speed increases are announced only when
 ## Red light cameras
 
 - The UI and voice grammar use **Red light camera** explicitly.
-- When a red light camera is marked, Route Collector asks OpenStreetMap/Overpass for nearby named roads and attempts to **snap the marker to the centre of the nearest intersection**, rather than blindly storing the phone's exact GPS position.
+- When a red light camera is marked, Route Collector asks OpenStreetMap/Overpass for nearby named roads and attempts to **snap the marker to the centre of the nearest intersection** rather than blindly storing the phone's exact GPS position.
 - The original observed GPS position is retained in the marker note for later data-quality work.
 - If an intersection cannot be resolved confidently, the marker falls back to the observed GPS point and reports **Intersection not confirmed** rather than guessing.
-- The snapped intersection name is spoken and shown in the overlay, e.g. `Red light camera snapped to Main Street & King Street`.
-- Previously collected legacy `camera` markers are still recognized as red light camera facts.
+- The snapped intersection name is spoken and shown in the overlay.
+- Previously collected legacy `camera` markers remain readable.
 - On future drives, Route Collector says **Red light camera ahead** before the intersection.
 - Inside the camera geofence, the overlay offers **Keep** or **Remove** in case the camera has been removed or deactivated.
 
 ## Settings
 
-The overlay includes a **⚙ Settings** panel. Settings are saved locally and do not require rebuilding the app.
+The overlay includes a compact **⚙ Settings** panel. Settings are saved locally and do not require rebuilding the app.
 
 - **Visual alerts ON/OFF** — spoken alerts can remain enabled while the overlay stays visually quiet for night driving.
 - **Red light camera warning distance** — adjustable in 50 m steps from 100 m to 500 m. Default: 200 m.
+- **Over-speed warning tolerance** — select a posted speed and adjust its allowed offset in 1 km/h steps.
 - **Export route data** — writes a JSON backup to the Android Downloads folder.
 
 Visual alerts use a dark overlay and do not intentionally wake or brighten the screen.
 
 ## Data export and sharing direction
 
-The current export includes drives, GPS breadcrumb points, and markers in `routecollector-export-v1` JSON format. This is the first step toward backup/import/community sharing.
+The current export includes drives, GPS breadcrumb points, and markers in `routecollector-export-v1` JSON format.
 
-Cloud synchronization, multi-user merge rules, confidence scoring, and shared-vs-private layers are intentionally deferred. They are tracked in `BACKLOG.md` so the current work can stay focused on reliable local collection and road testing.
+Cloud synchronization, multi-user merge rules, confidence scoring, and shared-vs-private layers are intentionally deferred and tracked in `BACKLOG.md`.
 
 ## Map display
 
@@ -84,21 +118,17 @@ Recorded drives are displayed on OpenStreetMap. Red light camera markers use a d
 
 - `DriveEntity` — one recorded trip.
 - `TrackPointEntity` — timestamp, latitude, longitude, GPS accuracy, and observed speed.
-- `MarkerEntity` — geographic facts such as `speed`, `red_light_camera`, `community_safety_zone_start/end`, and `senior_safety_zone_start/end`.
+- `MarkerEntity` — geographic facts such as `speed`, `speed_advance`, `red_light_camera`, `community_safety_zone_start/end`, and `senior_safety_zone_start/end`.
 
-Older `camera` and `school_zone` marker types remain readable for compatibility with data collected in earlier builds.
+Older marker types remain readable for compatibility with earlier builds.
 
 ## Local build/install
-
-1. Open the `RouteCollector` project in Android Studio.
-2. Use JDK 17.
-3. Build with:
 
 ```powershell
 .\gradlew.bat assembleDebug
 ```
 
-4. Install to an attached Android device with:
+Install to an attached Android device with:
 
 ```powershell
 & "C:\Users\Grant\AppData\Local\Android\Sdk\platform-tools\adb.exe" install -r ".\app\build\outputs\apk\debug\app-debug.apk"
@@ -110,30 +140,9 @@ The app targets Android 10+ (API 29+) and compile/target SDK 35.
 
 The repository includes `.github/workflows/android-debug-apk.yml`.
 
-It builds the debug APK automatically when code is pushed to `main` or `feature/google-maps-overlay`, and it can also be started manually from the GitHub **Actions** tab using **Run workflow**.
+Pushes to `main` or `feature/google-maps-overlay` trigger a cloud debug APK build. Trusted branch builds restore the repository's private debug-signing secret so the cloud APK can update the same installed development app used by local Android Studio builds.
 
-The workflow:
-
-1. checks out the repository on a clean Ubuntu runner;
-2. installs Temurin JDK 17;
-3. restores/caches Gradle dependencies;
-4. runs `./gradlew assembleDebug`;
-5. uploads `app-debug.apk` as the artifact **routecollector-debug-apk** for 14 days.
-
-This means the Android SDK libraries and Gradle dependencies do not need to come from the development laptop; the GitHub runner downloads the versions declared by the project.
-
-### Installing a cloud-built APK
-
-When the workflow finishes:
-
-1. Open the repository on GitHub.
-2. Open **Actions**.
-3. Open the successful **Build Android Debug APK** run.
-4. Download the **routecollector-debug-apk** artifact.
-5. Unzip it and open `app-debug.apk` on the Android phone while parked/not driving.
-6. Android may ask for permission to install apps from the browser/files app used to open the APK.
-
-The USB/ADB flow remains available at home for faster development; GitHub Actions is the cable-free build path.
+The latest successful cloud build is published to the stable prerelease tag `latest-debug` as `routecollector-debug.apk`, while the normal Actions artifact is also retained temporarily.
 
 ## Stack
 
@@ -150,7 +159,7 @@ The USB/ADB flow remains available at home for faster development; GitHub Action
 
 ## Important phone settings
 
-Samsung can aggressively sleep apps. For reliable recording, set Route Collector to **Unrestricted** battery use after installation. Start recording while the app is visible; the foreground notification keeps the location session alive when the app is backgrounded.
+Samsung can aggressively sleep apps. For reliable recording, set Route Collector to **Unrestricted** battery use after installation.
 
 ## Planned next steps
 
@@ -163,5 +172,3 @@ Samsung can aggressively sleep apps. For reliable recording, set Route Collector
 ## Safety
 
 Do not interact with the phone while driving. Hands-free commands and passive alerts are intended to reduce interaction, but the driver remains responsible for road conditions, legal speed, traffic signals, braking decisions, and safe vehicle operation. Route Collector alerts are informational only.
-
-<!-- Notification test: 2026-09-13 -->

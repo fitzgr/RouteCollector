@@ -41,7 +41,6 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private var driveId: Long? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
-
     private val warnedReductionMarkerIds = mutableSetOf<Long>()
     private val announcedMarkerIds = mutableSetOf<Long>()
     private val warnedCameraMarkerIds = mutableSetOf<Long>()
@@ -135,7 +134,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
 
             when (fact.kind) {
                 "speed" -> handleSpeedFact(fact, distance, approaching)
-                "red_light_camera" -> handleRedLightCamera(fact, distance, approaching, cameraWarningMetres)
+                "camera", "red_light_camera" -> handleRedLightCamera(fact, distance, approaching, cameraWarningMetres)
                 else -> handleZoneFact(fact, distance, approaching)
             }
         }
@@ -161,8 +160,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private fun handleZoneFact(fact: MarkerEntity, distance: Float, approaching: Boolean) {
         if (fact.id in announcedMarkerIds || !approaching || distance > ACTIVE_ZONE_RADIUS_METRES) return
         val phrase = when (fact.kind) {
-            "community_safety_zone_start" -> "Entering community safety zone"
-            "community_safety_zone_end" -> "Leaving community safety zone"
+            "school_zone", "school_zone_start", "community_safety_zone_start" -> "Entering community safety zone"
+            "school_zone_end", "community_safety_zone_end" -> "Leaving community safety zone"
             "senior_safety_zone_start" -> "Entering senior safety zone"
             "senior_safety_zone_end" -> "Leaving senior safety zone"
             else -> null
@@ -200,9 +199,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         client.removeLocationUpdates(callback)
         val id = driveId
         if (id != null) {
-            scope.launch {
-                dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) }
-            }
+            scope.launch { dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) } }
         }
         driveId = null
         currentSpeedLimit = null

@@ -37,15 +37,15 @@ fun RouteMap(
                 map.overlays.add(Marker(map).apply {
                     position = GeoPoint(m.latitude, m.longitude)
                     title = when (m.kind) {
-                        "red_light_camera" -> "Red light camera"
-                        "community_safety_zone_start" -> "Community safety zone start"
-                        "community_safety_zone_end" -> "Community safety zone end"
+                        "camera", "red_light_camera" -> "Red light camera"
+                        "school_zone", "school_zone_start", "community_safety_zone_start" -> "Community safety zone start"
+                        "school_zone_end", "community_safety_zone_end" -> "Community safety zone end"
                         "senior_safety_zone_start" -> "Senior safety zone start"
                         "senior_safety_zone_end" -> "Senior safety zone end"
                         else -> m.kind.replace('_', ' ').replaceFirstChar { it.uppercase() }
                     }
                     snippet = m.note
-                    if (m.kind == "red_light_camera") {
+                    if (m.kind == "camera" || m.kind == "red_light_camera") {
                         icon = ContextCompat.getDrawable(map.context, R.drawable.ic_red_light_camera)
                     }
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)

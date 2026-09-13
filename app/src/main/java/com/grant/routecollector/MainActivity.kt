@@ -6,7 +6,6 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
-import android.speech.RecognizerIntent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,43 +24,21 @@ import com.grant.routecollector.data.*
 import com.grant.routecollector.service.CollectorOverlayService
 import com.grant.routecollector.service.DriveTrackingService
 import com.grant.routecollector.ui.RouteMap
-import com.grant.routecollector.voice.VoiceMarker
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
 class MainActivity : ComponentActivity() {
-    private val dao by lazy { AppDatabase.get(this).dao() }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MaterialTheme { RouteCollectorScreen(this) } }
-    }
-
-    suspend fun saveMarkerFromLatest(note: String) {
-        val driveId = TrackingState.activeDriveId.value ?: return
-        val point = dao.latestPoint(driveId) ?: return
-        val lower = note.lowercase()
-        val kind = when {
-            "camera" in lower -> "camera"
-            "speed" in lower -> "speed"
-            "school" in lower -> "school_zone"
-            else -> "note"
-        }
-        dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = kind, note = note))
-    }
-
-    suspend fun saveQuickMarker(kind: String, note: String) {
-        val driveId = TrackingState.activeDriveId.value ?: return
-        val point = dao.latestPoint(driveId) ?: return
-        dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = kind, note = note))
+        setContent { MaterialTheme { RouteCollectorScreen() } }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RouteCollectorScreen(activity: MainActivity) {
+private fun RouteCollectorScreen() {
     val context = LocalContext.current
     val dao = remember { AppDatabase.get(context).dao() }
     val scope = rememberCoroutineScope()
@@ -76,13 +53,6 @@ private fun RouteCollectorScreen(activity: MainActivity) {
     val markers by markersFlow.collectAsStateWithLifecycle(initialValue = emptyList())
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
-    val voiceMarkerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val words = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-        val note = words?.firstOrNull()?.trim().orEmpty()
-        if (note.isNotBlank()) {
-            scope.launch { activity.saveMarkerFromLatest(note) }
-        }
-    }
 
     LaunchedEffect(Unit) {
         val wanted = buildList {
@@ -121,11 +91,13 @@ private fun RouteCollectorScreen(activity: MainActivity) {
                     }
                 }, modifier = Modifier.fillMaxWidth()) { Text("Start drive") }
             } else {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { scope.launch { activity.saveQuickMarker("camera", "Camera intersection") } }, modifier = Modifier.weight(1f)) { Text("Mark camera") }
-                    Button(onClick = { voiceMarkerLauncher.launch(VoiceMarker.createIntent()) }, modifier = Modifier.weight(1f)) { Text("Voice marker") }
+                Text(
+                    "Hands-free collection uses the wake word ‘Route’. Example: Route speed 60.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Button(onClick = { launchMapsWithOverlay() }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Open Google Maps + overlay")
                 }
-                Button(onClick = { launchMapsWithOverlay() }, modifier = Modifier.fillMaxWidth()) { Text("Open Google Maps + overlay") }
                 Button(onClick = {
                     context.startService(Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_STOP })
                     context.stopService(Intent(context, CollectorOverlayService::class.java))

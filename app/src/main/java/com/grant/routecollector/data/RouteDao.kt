@@ -11,10 +11,19 @@ interface RouteDao {
     @Insert suspend fun insertDrive(drive: DriveEntity): Long
     @Update suspend fun updateDrive(drive: DriveEntity)
     @Insert suspend fun insertPoint(point: TrackPointEntity)
-    @Insert suspend fun insertMarker(marker: MarkerEntity)
+    @Insert suspend fun insertMarker(marker: MarkerEntity): Long
 
     @Query("SELECT * FROM drives ORDER BY startedAt DESC")
     fun observeDrives(): Flow<List<DriveEntity>>
+
+    @Query("SELECT * FROM drives ORDER BY startedAt")
+    suspend fun getAllDrives(): List<DriveEntity>
+
+    @Query("SELECT * FROM track_points ORDER BY timestamp")
+    suspend fun getAllPoints(): List<TrackPointEntity>
+
+    @Query("SELECT * FROM markers ORDER BY timestamp")
+    suspend fun getAllMarkers(): List<MarkerEntity>
 
     @Query("SELECT * FROM drives WHERE id = :id LIMIT 1")
     suspend fun getDrive(id: Long): DriveEntity?
@@ -28,12 +37,12 @@ interface RouteDao {
     @Query("SELECT * FROM track_points WHERE driveId = :driveId ORDER BY timestamp DESC LIMIT 1")
     suspend fun latestPoint(driveId: Long): TrackPointEntity?
 
-    @Query("DELETE FROM markers WHERE id = (SELECT id FROM markers WHERE driveId = :driveId AND kind = 'camera' ORDER BY timestamp DESC LIMIT 1)")
-    suspend fun deleteLatestCameraMarker(driveId: Long): Int
+    @Query("DELETE FROM markers WHERE id = :markerId")
+    suspend fun deleteMarker(markerId: Long): Int
 
     @Query("DELETE FROM markers WHERE id = (SELECT id FROM markers WHERE driveId = :driveId ORDER BY timestamp DESC LIMIT 1)")
     suspend fun deleteLatestMarker(driveId: Long): Int
 
-    @Query("SELECT * FROM markers WHERE kind IN ('speed', 'school_zone', 'school_zone_start', 'school_zone_end') ORDER BY timestamp DESC")
+    @Query("SELECT * FROM markers WHERE kind IN ('speed', 'community_safety_zone_start', 'community_safety_zone_end', 'senior_safety_zone_start', 'senior_safety_zone_end', 'red_light_camera') ORDER BY timestamp DESC")
     suspend fun getSpokenRoadFacts(): List<MarkerEntity>
 }

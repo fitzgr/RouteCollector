@@ -119,7 +119,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             if (distance[0] <= ROAD_FACT_RADIUS_METRES) {
                 val phrase = when (fact.kind) {
                     "speed" -> speedPhrase(fact.note)
-                    "school_zone" -> "Entering school zone"
+                    "school_zone", "school_zone_start" -> "Entering school zone"
+                    "school_zone_end" -> "Leaving school zone"
                     else -> null
                 }
                 if (phrase != null) {

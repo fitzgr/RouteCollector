@@ -58,9 +58,10 @@ class CollectorOverlayService : Service() {
             setTextColor(0xFFFFFFFF.toInt())
             textSize = 14f
         }
-        val camera = Button(this).apply {
-            text = "Mark camera"
-            setOnClickListener { saveCameraMarker() }
+        val camera = Button(this).apply { text = "Mark camera" }
+        val schoolZone = Button(this).apply {
+            text = "Mark school zone"
+            setOnClickListener { saveRoadFact("school_zone", "School zone") }
         }
         val undoCamera = Button(this).apply {
             text = "Undo camera"
@@ -75,12 +76,13 @@ class CollectorOverlayService : Service() {
             setOnClickListener { stopSelf() }
         }
         camera.setOnClickListener {
-            saveCameraMarker {
+            saveRoadFact("camera", "Camera intersection") {
                 undoCamera.isEnabled = true
             }
         }
         panel.addView(title)
         panel.addView(camera)
+        panel.addView(schoolZone)
         panel.addView(undoCamera)
         panel.addView(hide)
 
@@ -123,7 +125,7 @@ class CollectorOverlayService : Service() {
         windowManager.addView(panel, params)
     }
 
-    private fun saveCameraMarker(onSaved: () -> Unit = {}) {
+    private fun saveRoadFact(kind: String, note: String, onSaved: () -> Unit = {}) {
         val driveId = TrackingState.activeDriveId.value
         if (driveId == null) {
             Toast.makeText(this, "Start a drive in Route Collector first", Toast.LENGTH_SHORT).show()
@@ -143,12 +145,13 @@ class CollectorOverlayService : Service() {
                     timestamp = System.currentTimeMillis(),
                     latitude = point.latitude,
                     longitude = point.longitude,
-                    kind = "camera",
-                    note = "Camera intersection"
+                    kind = kind,
+                    note = note
                 )
             )
             launch(Dispatchers.Main) {
-                Toast.makeText(this@CollectorOverlayService, "Camera marked — Undo available", Toast.LENGTH_SHORT).show()
+                val message = if (kind == "camera") "Camera marked — Undo available" else "School zone marked"
+                Toast.makeText(this@CollectorOverlayService, message, Toast.LENGTH_SHORT).show()
                 onSaved()
             }
         }

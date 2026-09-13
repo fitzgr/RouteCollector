@@ -11,7 +11,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-debug-apk:
@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -36,10 +38,34 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug
 
-      - name: Upload Route Collector debug APK
+      - name: Upload Route Collector debug APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: routecollector-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish stable latest-debug release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk routecollector-debug.apk
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f latest-debug "$GITHUB_SHA"
+          git push origin refs/tags/latest-debug --force
+
+          if gh release view latest-debug >/dev/null 2>&1; then
+            gh release upload latest-debug routecollector-debug.apk --clobber
+            gh release edit latest-debug \
+              --title "Route Collector Latest Debug" \
+              --notes "Latest cloud-built Route Collector debug APK. Branch: $GITHUB_REF_NAME. Commit: $GITHUB_SHA. For testing only."
+          else
+            gh release create latest-debug routecollector-debug.apk \
+              --title "Route Collector Latest Debug" \
+              --notes "Latest cloud-built Route Collector debug APK. Branch: $GITHUB_REF_NAME. Commit: $GITHUB_SHA. For testing only." \
+              --prerelease
+          fi

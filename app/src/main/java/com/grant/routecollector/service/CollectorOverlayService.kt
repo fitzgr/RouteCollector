@@ -5,7 +5,6 @@ import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.IBinder
 import android.view.Gravity
-import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
@@ -63,12 +62,26 @@ class CollectorOverlayService : Service() {
             text = "Mark camera"
             setOnClickListener { saveCameraMarker() }
         }
+        val undoCamera = Button(this).apply {
+            text = "Undo camera"
+            isEnabled = false
+            setOnClickListener {
+                undoLatestCameraMarker()
+                isEnabled = false
+            }
+        }
         val hide = Button(this).apply {
             text = "Hide"
             setOnClickListener { stopSelf() }
         }
+        camera.setOnClickListener {
+            saveCameraMarker {
+                undoCamera.isEnabled = true
+            }
+        }
         panel.addView(title)
         panel.addView(camera)
+        panel.addView(undoCamera)
         panel.addView(hide)
 
         val params = WindowManager.LayoutParams(
@@ -110,7 +123,7 @@ class CollectorOverlayService : Service() {
         windowManager.addView(panel, params)
     }
 
-    private fun saveCameraMarker() {
+    private fun saveCameraMarker(onSaved: () -> Unit = {}) {
         val driveId = TrackingState.activeDriveId.value
         if (driveId == null) {
             Toast.makeText(this, "Start a drive in Route Collector first", Toast.LENGTH_SHORT).show()
@@ -135,7 +148,26 @@ class CollectorOverlayService : Service() {
                 )
             )
             launch(Dispatchers.Main) {
-                Toast.makeText(this@CollectorOverlayService, "Camera marked", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@CollectorOverlayService, "Camera marked — Undo available", Toast.LENGTH_SHORT).show()
+                onSaved()
+            }
+        }
+    }
+
+    private fun undoLatestCameraMarker() {
+        val driveId = TrackingState.activeDriveId.value
+        if (driveId == null) {
+            Toast.makeText(this, "No active drive", Toast.LENGTH_SHORT).show()
+            return
+        }
+        scope.launch {
+            val deleted = dao.deleteLatestCameraMarker(driveId)
+            launch(Dispatchers.Main) {
+                Toast.makeText(
+                    this@CollectorOverlayService,
+                    if (deleted > 0) "Last camera marker removed" else "No camera marker to remove",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
     }

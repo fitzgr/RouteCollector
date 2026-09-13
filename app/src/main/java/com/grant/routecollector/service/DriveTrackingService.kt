@@ -41,6 +41,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private var driveId: Long? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+
     private val warnedReductionMarkerIds = mutableSetOf<Long>()
     private val announcedMarkerIds = mutableSetOf<Long>()
     private val warnedCameraMarkerIds = mutableSetOf<Long>()
@@ -54,6 +55,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             for (location in result.locations) {
                 TrackingState.latestLat.value = location.latitude
                 TrackingState.latestLon.value = location.longitude
+                TrackingState.latestSpeedKph.value = if (location.hasSpeed()) location.speed * 3.6f else null
                 scope.launch {
                     dao.insertPoint(
                         TrackPointEntity(
@@ -96,6 +98,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
                     verifiedCameraMarkerIds.clear()
                     previousMarkerDistances.clear()
                     currentSpeedLimit = null
+                    TrackingState.currentPostedSpeed.value = null
+                    TrackingState.latestSpeedKph.value = null
                     TrackingState.activeDriveId.value = it
                     startForeground(NOTIFICATION_ID, buildNotification())
                     beginUpdates()
@@ -134,7 +138,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
 
             when (fact.kind) {
                 "speed" -> handleSpeedFact(fact, distance, approaching)
-                "camera", "red_light_camera" -> handleRedLightCamera(fact, distance, approaching, cameraWarningMetres)
+                "red_light_camera", "camera" -> handleRedLightCamera(fact, distance, approaching, cameraWarningMetres)
                 else -> handleZoneFact(fact, distance, approaching)
             }
         }
@@ -153,6 +157,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         if (fact.id !in announcedMarkerIds && approaching && distance <= ACTIVE_ZONE_RADIUS_METRES) {
             announcedMarkerIds += fact.id
             currentSpeedLimit = targetSpeed
+            TrackingState.currentPostedSpeed.value = targetSpeed
             speak("$targetSpeed kilometre zone active")
         }
     }
@@ -160,8 +165,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private fun handleZoneFact(fact: MarkerEntity, distance: Float, approaching: Boolean) {
         if (fact.id in announcedMarkerIds || !approaching || distance > ACTIVE_ZONE_RADIUS_METRES) return
         val phrase = when (fact.kind) {
-            "school_zone", "school_zone_start", "community_safety_zone_start" -> "Entering community safety zone"
-            "school_zone_end", "community_safety_zone_end" -> "Leaving community safety zone"
+            "community_safety_zone_start", "school_zone", "school_zone_start" -> "Entering community safety zone"
+            "community_safety_zone_end", "school_zone_end" -> "Leaving community safety zone"
             "senior_safety_zone_start" -> "Entering senior safety zone"
             "senior_safety_zone_end" -> "Leaving senior safety zone"
             else -> null
@@ -199,12 +204,16 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         client.removeLocationUpdates(callback)
         val id = driveId
         if (id != null) {
-            scope.launch { dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) } }
+            scope.launch {
+                dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) }
+            }
         }
         driveId = null
         currentSpeedLimit = null
         previousMarkerDistances.clear()
         TrackingState.activeDriveId.value = null
+        TrackingState.currentPostedSpeed.value = null
+        TrackingState.latestSpeedKph.value = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

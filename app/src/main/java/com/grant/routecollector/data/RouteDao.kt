@@ -30,4 +30,7 @@ interface RouteDao {
 
     @Query("DELETE FROM markers WHERE id = (SELECT id FROM markers WHERE driveId = :driveId AND kind = 'camera' ORDER BY timestamp DESC LIMIT 1)")
     suspend fun deleteLatestCameraMarker(driveId: Long): Int
+
+    @Query("SELECT * FROM markers WHERE kind IN ('speed', 'school_zone') ORDER BY timestamp DESC")
+    suspend fun getSpokenRoadFacts(): List<MarkerEntity>
 }

@@ -29,7 +29,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         const val EXTRA_DRIVE_ID = "driveId"
         private const val CHANNEL_ID = "drive_tracking"
         private const val NOTIFICATION_ID = 101
-        private const val ROAD_FACT_RADIUS_METRES = 70f
+        private const val ACTIVE_ZONE_RADIUS_METRES = 70f
+        private const val REDUCTION_WARNING_RADIUS_METRES = 300f
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -38,7 +39,12 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private var driveId: Long? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+
+    // A marker can have two distinct announcements: an advance reduction warning and its active-zone announcement.
+    private val warnedReductionMarkerIds = mutableSetOf<Long>()
     private val announcedMarkerIds = mutableSetOf<Long>()
+    private val previousMarkerDistances = mutableMapOf<Long, Float>()
+    private var currentSpeedLimit: Int? = null
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -82,7 +88,10 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             ACTION_START -> {
                 driveId = intent.getLongExtra(EXTRA_DRIVE_ID, -1L).takeIf { it > 0 }
                 driveId?.let {
+                    warnedReductionMarkerIds.clear()
                     announcedMarkerIds.clear()
+                    previousMarkerDistances.clear()
+                    currentSpeedLimit = null
                     TrackingState.activeDriveId.value = it
                     startForeground(NOTIFICATION_ID, buildNotification())
                     beginUpdates()
@@ -107,35 +116,74 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private suspend fun announceNearbyRoadFacts(location: Location) {
         val facts = dao.getSpokenRoadFacts()
         for (fact in facts) {
-            if (fact.id in announcedMarkerIds) continue
-            val distance = FloatArray(1)
+            val distanceResult = FloatArray(1)
             Location.distanceBetween(
                 location.latitude,
                 location.longitude,
                 fact.latitude,
                 fact.longitude,
-                distance
+                distanceResult
             )
-            if (distance[0] <= ROAD_FACT_RADIUS_METRES) {
-                val phrase = when (fact.kind) {
-                    "speed" -> speedPhrase(fact.note)
-                    "school_zone", "school_zone_start" -> "Entering school zone"
-                    "school_zone_end" -> "Leaving school zone"
-                    else -> null
-                }
-                if (phrase != null) {
-                    announcedMarkerIds += fact.id
-                    speak(phrase)
-                }
+            val distance = distanceResult[0]
+            val previousDistance = previousMarkerDistances[fact.id]
+            val approaching = previousDistance == null || distance < previousDistance
+            previousMarkerDistances[fact.id] = distance
+
+            if (fact.kind == "speed") {
+                handleSpeedFact(fact, distance, approaching)
+                continue
+            }
+
+            if (fact.id in announcedMarkerIds || !approaching || distance > ACTIVE_ZONE_RADIUS_METRES) continue
+            val phrase = when (fact.kind) {
+                "school_zone", "school_zone_start" -> "Entering school zone"
+                "school_zone_end" -> "Leaving school zone"
+                else -> null
+            }
+            if (phrase != null) {
+                announcedMarkerIds += fact.id
+                speak(phrase)
             }
         }
     }
 
-    private fun speedPhrase(note: String): String {
-        val speed = Regex("\\b(20|30|40|50|60|70|80|90|100|110|120)\\b")
-            .find(note)?.groupValues?.getOrNull(1)
-        return if (speed != null) "Speed limit $speed kilometres per hour" else "Speed limit change ahead"
+    private fun handleSpeedFact(fact: MarkerEntity, distance: Float, approaching: Boolean) {
+        val targetSpeed = parseSpeed(fact.note) ?: return
+        val current = currentSpeedLimit
+
+        // Advance warnings are intentionally asymmetric: warn before a reduction, but not before an increase.
+        // We also require the marker to be getting closer to reduce warnings from nearby/behind markers.
+        if (
+            current != null &&
+            targetSpeed < current &&
+            fact.id !in warnedReductionMarkerIds &&
+            approaching &&
+            distance <= REDUCTION_WARNING_RADIUS_METRES &&
+            distance > ACTIVE_ZONE_RADIUS_METRES
+        ) {
+            warnedReductionMarkerIds += fact.id
+            val roundedDistance = ((distance / 50f).toInt().coerceAtLeast(1) * 50)
+            speak("Speed reduction to $targetSpeed in about $roundedDistance metres")
+        }
+
+        // At the collected boundary, announce both increases and reductions and make the new zone current.
+        if (
+            fact.id !in announcedMarkerIds &&
+            approaching &&
+            distance <= ACTIVE_ZONE_RADIUS_METRES
+        ) {
+            announcedMarkerIds += fact.id
+            currentSpeedLimit = targetSpeed
+            speak("$targetSpeed kilometre zone active")
+        }
     }
+
+    private fun parseSpeed(note: String): Int? =
+        Regex("\\b(20|30|40|50|60|70|80|90|100|110|120)\\b")
+            .find(note)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
 
     private fun speak(text: String) {
         TrackingState.postDriverAlert(text)
@@ -153,6 +201,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             }
         }
         driveId = null
+        currentSpeedLimit = null
+        previousMarkerDistances.clear()
         TrackingState.activeDriveId.value = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -166,7 +216,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private fun buildNotification() = NotificationCompat.Builder(this, CHANNEL_ID)
         .setSmallIcon(android.R.drawable.ic_menu_mylocation)
         .setContentTitle("Route Collector is recording")
-        .setContentText("GPS breadcrumb recording and spoken route alerts are active")
+        .setContentText("GPS recording and route alerts are active")
         .setOngoing(true)
         .setContentIntent(
             PendingIntent.getActivity(

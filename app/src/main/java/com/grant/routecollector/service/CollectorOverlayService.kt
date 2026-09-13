@@ -4,11 +4,13 @@ import android.app.Service
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.IBinder
+import android.speech.tts.TextToSpeech
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.GridLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -20,8 +22,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import java.util.Locale
 
-class CollectorOverlayService : Service() {
+class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     companion object {
         const val ACTION_SHOW = "routecollector.OVERLAY_SHOW"
         const val ACTION_HIDE = "routecollector.OVERLAY_HIDE"
@@ -31,10 +34,21 @@ class CollectorOverlayService : Service() {
     private var overlayView: View? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val dao by lazy { AppDatabase.get(this).dao() }
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var highwayMode = true
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        tts = TextToSpeech(this, this)
+    }
+
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) {
+            tts?.language = Locale.CANADA
+            ttsReady = true
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -58,31 +72,80 @@ class CollectorOverlayService : Service() {
             setTextColor(0xFFFFFFFF.toInt())
             textSize = 14f
         }
-        val camera = Button(this).apply { text = "Mark camera" }
-        val schoolZone = Button(this).apply {
-            text = "Mark school zone"
-            setOnClickListener { saveRoadFact("school_zone", "School zone") }
+        val mode = Button(this).apply { text = "Mode: Highway" }
+        val speedChange = Button(this).apply { text = "Mark speed change" }
+        val speedGrid = GridLayout(this).apply {
+            columnCount = 3
+            visibility = View.GONE
         }
+        val camera = Button(this).apply { text = "Mark camera" }
+        val schoolStart = Button(this).apply { text = "School zone start" }
+        val schoolEnd = Button(this).apply { text = "School zone end" }
         val undoCamera = Button(this).apply {
             text = "Undo camera"
             isEnabled = false
-            setOnClickListener {
-                undoLatestCameraMarker()
-                isEnabled = false
-            }
         }
         val hide = Button(this).apply {
             text = "Hide"
             setOnClickListener { stopSelf() }
         }
+
+        fun rebuildSpeedButtons() {
+            speedGrid.removeAllViews()
+            val speeds = if (highwayMode) listOf(60, 70, 80, 90, 100, 110) else listOf(30, 40, 50, 60, 70, 80)
+            for (speed in speeds) {
+                val button = Button(this).apply {
+                    text = speed.toString()
+                    setOnClickListener {
+                        saveRoadFact("speed", "Speed limit $speed") {
+                            speak("Speed $speed marked")
+                            speedGrid.visibility = View.GONE
+                        }
+                    }
+                }
+                speedGrid.addView(button)
+            }
+        }
+
+        mode.setOnClickListener {
+            highwayMode = !highwayMode
+            mode.text = if (highwayMode) "Mode: Highway" else "Mode: Local"
+            rebuildSpeedButtons()
+            speak(if (highwayMode) "Highway speed capture" else "Local road speed capture")
+        }
+        speedChange.setOnClickListener {
+            if (speedGrid.visibility == View.VISIBLE) {
+                speedGrid.visibility = View.GONE
+            } else {
+                rebuildSpeedButtons()
+                speedGrid.visibility = View.VISIBLE
+                speak("Select new posted speed")
+            }
+        }
         camera.setOnClickListener {
             saveRoadFact("camera", "Camera intersection") {
                 undoCamera.isEnabled = true
+                speak("Camera marked")
             }
         }
+        schoolStart.setOnClickListener {
+            saveRoadFact("school_zone_start", "School zone start") { speak("School zone start marked") }
+        }
+        schoolEnd.setOnClickListener {
+            saveRoadFact("school_zone_end", "School zone end") { speak("School zone end marked") }
+        }
+        undoCamera.setOnClickListener {
+            undoLatestCameraMarker()
+            undoCamera.isEnabled = false
+        }
+
         panel.addView(title)
+        panel.addView(mode)
+        panel.addView(speedChange)
+        panel.addView(speedGrid)
         panel.addView(camera)
-        panel.addView(schoolZone)
+        panel.addView(schoolStart)
+        panel.addView(schoolEnd)
         panel.addView(undoCamera)
         panel.addView(hide)
 
@@ -95,7 +158,7 @@ class CollectorOverlayService : Service() {
         ).apply {
             gravity = Gravity.TOP or Gravity.END
             x = 20
-            y = 220
+            y = 180
         }
 
         var startX = 0
@@ -150,8 +213,7 @@ class CollectorOverlayService : Service() {
                 )
             )
             launch(Dispatchers.Main) {
-                val message = if (kind == "camera") "Camera marked — Undo available" else "School zone marked"
-                Toast.makeText(this@CollectorOverlayService, message, Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@CollectorOverlayService, "$note marked at GPS position", Toast.LENGTH_SHORT).show()
                 onSaved()
             }
         }
@@ -171,8 +233,14 @@ class CollectorOverlayService : Service() {
                     if (deleted > 0) "Last camera marker removed" else "No camera marker to remove",
                     Toast.LENGTH_SHORT
                 ).show()
+                if (deleted > 0) speak("Camera marker removed")
             }
         }
+    }
+
+    private fun speak(text: String) {
+        if (!ttsReady) return
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "overlay-${System.currentTimeMillis()}")
     }
 
     private fun hideOverlay() {
@@ -182,6 +250,8 @@ class CollectorOverlayService : Service() {
     override fun onDestroy() {
         overlayView?.let { windowManager.removeView(it) }
         overlayView = null
+        tts?.stop()
+        tts?.shutdown()
         scope.cancel()
         super.onDestroy()
     }

@@ -21,10 +21,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
-import android.widget.GridLayout
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Toast
 import com.grant.routecollector.data.AppDatabase
 import com.grant.routecollector.data.MarkerEntity
 import com.grant.routecollector.data.TrackingState
@@ -39,6 +37,8 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     companion object {
         const val ACTION_SHOW = "routecollector.OVERLAY_SHOW"
         const val ACTION_HIDE = "routecollector.OVERLAY_HIDE"
+        private const val PREFS = "routecollector_overlay"
+        private const val PREF_VISUAL_ALERTS = "visual_alerts_enabled"
     }
 
     private lateinit var windowManager: WindowManager
@@ -47,7 +47,6 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     private val dao by lazy { AppDatabase.get(this).dao() }
     private var tts: TextToSpeech? = null
     private var ttsReady = false
-    private var highwayMode = true
 
     private lateinit var audioManager: AudioManager
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -56,13 +55,28 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     private var handsFreeEnabled = true
     private var suppressRestartUntilSpeechDone = false
     private var listeningStatus: TextView? = null
+    private var visualAlertView: TextView? = null
+    private var visualAlertsEnabled = true
+
+    private val clearVisualAlert = Runnable {
+        visualAlertView?.visibility = View.GONE
+    }
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        visualAlertsEnabled = getSharedPreferences(PREFS, MODE_PRIVATE)
+            .getBoolean(PREF_VISUAL_ALERTS, true)
         tts = TextToSpeech(this, this)
         setupSpeechRecognizer()
+        scope.launch {
+            TrackingState.driverAlert.collect { alert ->
+                if (alert != null) {
+                    mainHandler.post { showVisualAlert(alert.text) }
+                }
+            }
+        }
     }
 
     override fun onInit(status: Int) {
@@ -113,17 +127,21 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
             setTextColor(0xFFB8E986.toInt())
             textSize = 13f
         }
-        val help = TextView(this).apply {
-            text = "Say: Speed 60 • School start • School end\nCamera • Undo"
-            setTextColor(0xFFFFFFFF.toInt())
+        val grammar = TextView(this).apply {
+            text = "<command> ::= Speed <limit> | School <start|end> | Camera | Undo\nExample: “Speed 60”"
+            setTextColor(0xFFD8D8D8.toInt())
             textSize = 12f
         }
-        val handsFree = Button(this).apply { text = "Hands-free: ON" }
-        val mode = Button(this).apply { text = "Mode: Highway" }
-        val speedChange = Button(this).apply { text = "Mark speed change" }
-        val speedGrid = GridLayout(this).apply {
-            columnCount = 3
+        visualAlertView = TextView(this).apply {
             visibility = View.GONE
+            setTextColor(0xFFFFFFFF.toInt())
+            setBackgroundColor(0xFF37474F.toInt())
+            setPadding(14, 10, 14, 10)
+            textSize = 14f
+        }
+        val handsFree = Button(this).apply { text = "Hands-free: ON" }
+        val visualAlerts = Button(this).apply {
+            text = if (visualAlertsEnabled) "Visual alerts: ON" else "Visual alerts: OFF"
         }
         val camera = Button(this).apply { text = "Mark camera" }
         val schoolStart = Button(this).apply { text = "School zone start" }
@@ -132,23 +150,6 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         val hide = Button(this).apply {
             text = "Hide"
             setOnClickListener { stopSelf() }
-        }
-
-        fun rebuildSpeedButtons() {
-            speedGrid.removeAllViews()
-            val speeds = if (highwayMode) listOf(60, 70, 80, 90, 100, 110) else listOf(30, 40, 50, 60, 70, 80)
-            for (speed in speeds) {
-                val button = Button(this).apply {
-                    text = speed.toString()
-                    setOnClickListener {
-                        saveRoadFact("speed", "Speed limit $speed") {
-                            acknowledge("$speed kilometre zone marked")
-                            speedGrid.visibility = View.GONE
-                        }
-                    }
-                }
-                speedGrid.addView(button)
-            }
         }
 
         handsFree.setOnClickListener {
@@ -162,19 +163,18 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
                 listeningStatus?.text = "Hands-free: off"
             }
         }
-        mode.setOnClickListener {
-            highwayMode = !highwayMode
-            mode.text = if (highwayMode) "Mode: Highway" else "Mode: Local"
-            rebuildSpeedButtons()
-            acknowledge(if (highwayMode) "Highway mode" else "Local road mode")
-        }
-        speedChange.setOnClickListener {
-            if (speedGrid.visibility == View.VISIBLE) {
-                speedGrid.visibility = View.GONE
+        visualAlerts.setOnClickListener {
+            visualAlertsEnabled = !visualAlertsEnabled
+            getSharedPreferences(PREFS, MODE_PRIVATE)
+                .edit()
+                .putBoolean(PREF_VISUAL_ALERTS, visualAlertsEnabled)
+                .apply()
+            visualAlerts.text = if (visualAlertsEnabled) "Visual alerts: ON" else "Visual alerts: OFF"
+            if (!visualAlertsEnabled) {
+                mainHandler.removeCallbacks(clearVisualAlert)
+                visualAlertView?.visibility = View.GONE
             } else {
-                rebuildSpeedButtons()
-                speedGrid.visibility = View.VISIBLE
-                acknowledge("Select new posted speed")
+                showVisualAlert("Visual alerts enabled")
             }
         }
         camera.setOnClickListener {
@@ -190,11 +190,10 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
 
         panel.addView(title)
         panel.addView(listeningStatus)
-        panel.addView(help)
+        panel.addView(grammar)
+        panel.addView(visualAlertView)
         panel.addView(handsFree)
-        panel.addView(mode)
-        panel.addView(speedChange)
-        panel.addView(speedGrid)
+        panel.addView(visualAlerts)
         panel.addView(camera)
         panel.addView(schoolStart)
         panel.addView(schoolEnd)
@@ -271,7 +270,6 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun startListeningSoon(delayMs: Long) {
-        mainHandler.removeCallbacksAndMessages(null)
         mainHandler.postDelayed({
             if (!handsFreeEnabled || suppressRestartUntilSpeechDone || overlayView == null) return@postDelayed
             val recognizer = speechRecognizer ?: return@postDelayed
@@ -338,17 +336,13 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     private fun saveRoadFact(kind: String, note: String, onSaved: () -> Unit = {}) {
         val driveId = TrackingState.activeDriveId.value
         if (driveId == null) {
-            Toast.makeText(this, "Start a drive in Route Collector first", Toast.LENGTH_SHORT).show()
             acknowledge("No active drive")
             return
         }
         scope.launch {
             val point = dao.latestPoint(driveId)
             if (point == null) {
-                launch(Dispatchers.Main) {
-                    Toast.makeText(this@CollectorOverlayService, "Waiting for GPS", Toast.LENGTH_SHORT).show()
-                    acknowledge("Waiting for GPS")
-                }
+                launch(Dispatchers.Main) { acknowledge("Waiting for GPS") }
                 return@launch
             }
             dao.insertMarker(
@@ -361,10 +355,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
                     note = note
                 )
             )
-            launch(Dispatchers.Main) {
-                Toast.makeText(this@CollectorOverlayService, "$note marked at GPS position", Toast.LENGTH_SHORT).show()
-                onSaved()
-            }
+            launch(Dispatchers.Main) { onSaved() }
         }
     }
 
@@ -383,6 +374,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun acknowledge(text: String) {
+        TrackingState.postDriverAlert(text)
         suppressRestartUntilSpeechDone = true
         speechRecognizer?.cancel()
         if (!ttsReady) {
@@ -393,6 +385,16 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         requestTransientAudioFocus()
         val utteranceId = "overlay-${System.currentTimeMillis()}"
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+    }
+
+    private fun showVisualAlert(text: String) {
+        if (!visualAlertsEnabled) return
+        visualAlertView?.apply {
+            this.text = text
+            visibility = View.VISIBLE
+        }
+        mainHandler.removeCallbacks(clearVisualAlert)
+        mainHandler.postDelayed(clearVisualAlert, 4_000L)
     }
 
     private fun requestTransientAudioFocus() {
@@ -432,6 +434,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         overlayView?.let { windowManager.removeView(it) }
         overlayView = null
         listeningStatus = null
+        visualAlertView = null
         tts?.stop()
         tts?.shutdown()
         audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }

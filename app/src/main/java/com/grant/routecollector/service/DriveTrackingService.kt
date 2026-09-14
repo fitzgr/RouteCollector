@@ -155,14 +155,34 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         autoBackupDoneForCurrentStop = true
         scope.launch {
             try {
+                val id = driveId ?: return@launch
+                // Close the drive before exporting so the backup records it as completed.
+                dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) }
                 val fileName = RouteDataExporter.exportToDownloads(this@DriveTrackingService, dao, automatic = true)
-                TrackingState.postDriverAlert("Route data backed up after 10 minutes stopped: $fileName", kind = "auto_backup")
+                TrackingState.postDriverAlert("Route backed up and drive ended after 10 minutes stopped: $fileName", kind = "auto_backup")
+                finishAfterAutomaticBackup()
             } catch (_: Exception) {
                 // Allow another attempt on the next location update if writing the backup failed.
                 autoBackupDoneForCurrentStop = false
                 TrackingState.postDriverAlert("Automatic route data backup failed", kind = "auto_backup_error")
             }
         }
+    }
+
+    private fun finishAfterAutomaticBackup() {
+        client.removeLocationUpdates(callback)
+        driveId = null
+        currentSpeedLimit = null
+        overSpeedAlertActive = false
+        stoppedSinceElapsedRealtime = null
+        previousMarkerDistances.clear()
+        TrackingState.activeDriveId.value = null
+        TrackingState.currentPostedSpeed.value = null
+        TrackingState.latestSpeedKph.value = null
+        // Also remove the floating collector so a new trip requires reopening Route Collector.
+        stopService(Intent(this, CollectorOverlayService::class.java))
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun defaultTolerance(speed: Int): Int = if (speed >= 100) 9 else 8

@@ -11,6 +11,9 @@ import java.util.Date
 import java.util.Locale
 
 object RouteDataExporter {
+    private const val AUTO_BACKUP_PREFIX = "routecollector-auto-"
+    private const val MAX_AUTO_BACKUPS = 5
+
     suspend fun exportToDownloads(
         context: Context,
         dao: RouteDao,
@@ -72,6 +75,34 @@ object RouteDataExporter {
             ?: error("Could not create export")
         context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(root.toString(2)) }
             ?: error("Could not open export")
+
+        if (automatic) pruneOldAutomaticBackups(context)
         return fileName
+    }
+
+    private fun pruneOldAutomaticBackups(context: Context) {
+        val resolver = context.contentResolver
+        val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(
+            MediaStore.Downloads._ID,
+            MediaStore.Downloads.DISPLAY_NAME,
+            MediaStore.Downloads.DATE_ADDED
+        )
+        val selection = "${MediaStore.Downloads.DISPLAY_NAME} LIKE ?"
+        val selectionArgs = arrayOf("$AUTO_BACKUP_PREFIX%.json")
+        val sortOrder = "${MediaStore.Downloads.DATE_ADDED} DESC, ${MediaStore.Downloads._ID} DESC"
+
+        val oldIds = mutableListOf<Long>()
+        resolver.query(collection, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
+            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID)
+            var position = 0
+            while (cursor.moveToNext()) {
+                if (position >= MAX_AUTO_BACKUPS) oldIds += cursor.getLong(idColumn)
+                position++
+            }
+        }
+        oldIds.forEach { id ->
+            resolver.delete(android.content.ContentUris.withAppendedId(collection, id), null, null)
+        }
     }
 }

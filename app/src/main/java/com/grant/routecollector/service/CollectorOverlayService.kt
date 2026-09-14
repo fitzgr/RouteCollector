@@ -293,7 +293,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         }
         val label = TextView(this).apply { text = "Speed marker"; setTextColor(0xFFFFFFFF.toInt()); textSize = 12f }
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val speeds = listOf(20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120)
+        val speeds = listOf(40, 50, 60, 70, 80, 90, 100, 110)
         val speedSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(this@CollectorOverlayService, android.R.layout.simple_spinner_dropdown_item, speeds.map { "$it km/h" })
             setSelection(speeds.indexOf(60))
@@ -367,7 +367,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         })
 
         val toleranceTitle = TextView(this).apply { text = "Over-speed warning"; setTextColor(0xFFFFFFFF.toInt()); textSize = 12f }
-        val toleranceSpeeds = listOf(30, 40, 50, 60, 70, 80, 90, 100, 110)
+        val toleranceSpeeds = listOf(40, 50, 60, 70, 80, 90, 100, 110)
         val toleranceSpeed = Spinner(this).apply {
             adapter = ArrayAdapter(this@CollectorOverlayService, android.R.layout.simple_spinner_dropdown_item, toleranceSpeeds.map { "$it km/h" })
             setSelection(toleranceSpeeds.indexOf(80))
@@ -508,13 +508,12 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     private fun String.containsAny(vararg values: String) = values.any { contains(it) }
 
     private fun extractSpeed(command: String): Int? {
-        Regex("\\b(20|30|40|50|60|70|80|90|100|110|120)\\b")
+        Regex("\\b(40|50|60|70|80|90|100|110)\\b")
             .find(command)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
         val words = mapOf(
-            "twenty" to 20, "thirty" to 30, "forty" to 40, "fifty" to 50, "sixty" to 60,
+            "forty" to 40, "fifty" to 50, "sixty" to 60,
             "seventy" to 70, "eighty" to 80, "ninety" to 90, "one hundred" to 100,
-            "one ten" to 110, "one hundred ten" to 110, "one hundred and ten" to 110,
-            "one twenty" to 120, "one hundred twenty" to 120
+            "one ten" to 110, "one hundred ten" to 110
         )
         return words.entries.firstOrNull { it.key in command }?.value
     }

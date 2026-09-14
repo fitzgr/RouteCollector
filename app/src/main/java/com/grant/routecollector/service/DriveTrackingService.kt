@@ -33,6 +33,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val REDUCTION_WARNING_RADIUS_METRES = 300f
         private const val PREFS = "routecollector_overlay"
         private const val PREF_CAMERA_WARNING_METRES = "red_light_camera_warning_metres"
+        private const val PREF_SPEED_TOLERANCE_PREFIX = "speed_tolerance_"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -48,6 +49,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private val verifiedCameraMarkerIds = mutableSetOf<Long>()
     private val previousMarkerDistances = mutableMapOf<Long, Float>()
     private var currentSpeedLimit: Int? = null
+    private var overSpeedAlertActive = false
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -55,7 +57,9 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             for (location in result.locations) {
                 TrackingState.latestLat.value = location.latitude
                 TrackingState.latestLon.value = location.longitude
-                TrackingState.latestSpeedKph.value = if (location.hasSpeed()) location.speed * 3.6f else null
+                val actualSpeedKph = if (location.hasSpeed()) location.speed * 3.6f else null
+                TrackingState.latestSpeedKph.value = actualSpeedKph
+                checkOverSpeedThreshold(actualSpeedKph)
                 scope.launch {
                     dao.insertPoint(
                         TrackPointEntity(
@@ -98,6 +102,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
                     verifiedCameraMarkerIds.clear()
                     previousMarkerDistances.clear()
                     currentSpeedLimit = null
+                    overSpeedAlertActive = false
                     TrackingState.currentPostedSpeed.value = null
                     TrackingState.latestSpeedKph.value = null
                     TrackingState.activeDriveId.value = it
@@ -120,6 +125,33 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             .setMinUpdateIntervalMillis(1_000L)
             .build()
         client.requestLocationUpdates(request, callback, mainLooper)
+    }
+
+    private fun defaultTolerance(speed: Int): Int = if (speed >= 100) 9 else 8
+
+    private fun getSpeedTolerance(speed: Int): Int =
+        getSharedPreferences(PREFS, MODE_PRIVATE)
+            .getInt("$PREF_SPEED_TOLERANCE_PREFIX$speed", defaultTolerance(speed))
+
+    private fun checkOverSpeedThreshold(actualSpeedKph: Float?) {
+        val posted = TrackingState.currentPostedSpeed.value ?: run {
+            overSpeedAlertActive = false
+            return
+        }
+        val actual = actualSpeedKph ?: run {
+            overSpeedAlertActive = false
+            return
+        }
+        val threshold = posted + getSpeedTolerance(posted)
+        val overThreshold = actual > threshold
+
+        if (overThreshold && !overSpeedAlertActive) {
+            overSpeedAlertActive = true
+            speak("Speed threshold exceeded")
+        } else if (!overThreshold) {
+            // Re-arm only after the vehicle returns to or below the configured threshold.
+            overSpeedAlertActive = false
+        }
     }
 
     private suspend fun announceNearbyRoadFacts(location: Location) {
@@ -158,6 +190,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             announcedMarkerIds += fact.id
             currentSpeedLimit = targetSpeed
             TrackingState.currentPostedSpeed.value = targetSpeed
+            // A new posted-speed zone gets a fresh over-speed evaluation.
+            overSpeedAlertActive = false
             speak("$targetSpeed kilometre zone active")
         }
     }
@@ -210,6 +244,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         }
         driveId = null
         currentSpeedLimit = null
+        overSpeedAlertActive = false
         previousMarkerDistances.clear()
         TrackingState.activeDriveId.value = null
         TrackingState.currentPostedSpeed.value = null

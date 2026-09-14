@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Location
 import android.os.IBinder
+import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
@@ -34,6 +35,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val PREFS = "routecollector_overlay"
         private const val PREF_CAMERA_WARNING_METRES = "red_light_camera_warning_metres"
         private const val PREF_SPEED_TOLERANCE_PREFIX = "speed_tolerance_"
+        private const val NO_DRIVING_SPEED_KPH = 5f
+        private const val AUTO_BACKUP_STOPPED_MILLIS = 10 * 60 * 1000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -50,6 +53,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private val previousMarkerDistances = mutableMapOf<Long, Float>()
     private var currentSpeedLimit: Int? = null
     private var overSpeedAlertActive = false
+    private var stoppedSinceElapsedRealtime: Long? = null
+    private var autoBackupDoneForCurrentStop = false
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -60,6 +65,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
                 val actualSpeedKph = if (location.hasSpeed()) location.speed * 3.6f else null
                 TrackingState.latestSpeedKph.value = actualSpeedKph
                 checkOverSpeedThreshold(actualSpeedKph)
+                checkAutomaticBackup(actualSpeedKph)
                 scope.launch {
                     dao.insertPoint(
                         TrackPointEntity(
@@ -103,6 +109,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
                     previousMarkerDistances.clear()
                     currentSpeedLimit = null
                     overSpeedAlertActive = false
+                    stoppedSinceElapsedRealtime = null
+                    autoBackupDoneForCurrentStop = false
                     TrackingState.currentPostedSpeed.value = null
                     TrackingState.latestSpeedKph.value = null
                     TrackingState.activeDriveId.value = it
@@ -125,6 +133,36 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             .setMinUpdateIntervalMillis(1_000L)
             .build()
         client.requestLocationUpdates(request, callback, mainLooper)
+    }
+
+    private fun checkAutomaticBackup(actualSpeedKph: Float?) {
+        val driving = actualSpeedKph != null && actualSpeedKph > NO_DRIVING_SPEED_KPH
+        if (driving) {
+            stoppedSinceElapsedRealtime = null
+            autoBackupDoneForCurrentStop = false
+            return
+        }
+
+        val now = SystemClock.elapsedRealtime()
+        val stoppedSince = stoppedSinceElapsedRealtime
+        if (stoppedSince == null) {
+            stoppedSinceElapsedRealtime = now
+            return
+        }
+        if (autoBackupDoneForCurrentStop || now - stoppedSince < AUTO_BACKUP_STOPPED_MILLIS) return
+
+        // Latch before launching so repeated GPS callbacks cannot create duplicate backups.
+        autoBackupDoneForCurrentStop = true
+        scope.launch {
+            try {
+                val fileName = RouteDataExporter.exportToDownloads(this@DriveTrackingService, dao, automatic = true)
+                TrackingState.postDriverAlert("Route data backed up after 10 minutes stopped: $fileName", kind = "auto_backup")
+            } catch (_: Exception) {
+                // Allow another attempt on the next location update if writing the backup failed.
+                autoBackupDoneForCurrentStop = false
+                TrackingState.postDriverAlert("Automatic route data backup failed", kind = "auto_backup_error")
+            }
+        }
     }
 
     private fun defaultTolerance(speed: Int): Int = if (speed >= 100) 9 else 8
@@ -245,6 +283,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         driveId = null
         currentSpeedLimit = null
         overSpeedAlertActive = false
+        stoppedSinceElapsedRealtime = null
+        autoBackupDoneForCurrentStop = false
         previousMarkerDistances.clear()
         TrackingState.activeDriveId.value = null
         TrackingState.currentPostedSpeed.value = null

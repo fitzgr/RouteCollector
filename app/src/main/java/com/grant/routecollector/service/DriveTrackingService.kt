@@ -16,6 +16,7 @@ import androidx.core.app.NotificationCompat
 import com.google.android.gms.location.*
 import com.grant.routecollector.MainActivity
 import com.grant.routecollector.data.*
+import com.grant.routecollector.map.RoadSpeedResolver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -40,6 +41,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val AUTO_BACKUP_STOPPED_MILLIS = 10 * 60 * 1000L
         private const val SAME_DIRECTION_TOLERANCE_DEGREES = 60f
         private const val REVERSE_DIRECTION_MIN_DEGREES = 120f
+        private const val OSM_SPEED_RETRY_MILLIS = 30_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -62,6 +64,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private var autoBackupDoneForCurrentStop = false
     private var previousLocationForBearing: Location? = null
     private var currentTravelBearing: Float? = null
+    private var lastOsmSpeedAttemptElapsedRealtime = 0L
+    private var osmSpeedLookupInFlight = false
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -72,6 +76,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
                 val actualSpeedKph = if (location.hasSpeed()) location.speed * 3.6f else null
                 TrackingState.latestSpeedKph.value = actualSpeedKph
                 updateTravelBearing(location, actualSpeedKph)
+                bootstrapPostedSpeedFromOsm(location)
                 checkOverSpeedThreshold(actualSpeedKph)
                 checkAutomaticBackup(actualSpeedKph)
                 scope.launch {
@@ -123,6 +128,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
                     overSpeedAlertActive = false
                     stoppedSinceElapsedRealtime = null
                     autoBackupDoneForCurrentStop = false
+                    lastOsmSpeedAttemptElapsedRealtime = 0L
+                    osmSpeedLookupInFlight = false
                     TrackingState.currentPostedSpeed.value = null
                     TrackingState.latestSpeedKph.value = null
                     TrackingState.latestBearingDegrees.value = null
@@ -158,6 +165,29 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             TrackingState.latestBearingDegrees.value = currentTravelBearing
         }
         previousLocationForBearing = Location(location)
+    }
+
+    private fun bootstrapPostedSpeedFromOsm(location: Location) {
+        // OSM is a startup/fallback source only. A collected directional zone marker is authoritative.
+        if (currentSpeedLimit != null || osmSpeedLookupInFlight) return
+        val now = SystemClock.elapsedRealtime()
+        if (lastOsmSpeedAttemptElapsedRealtime != 0L && now - lastOsmSpeedAttemptElapsedRealtime < OSM_SPEED_RETRY_MILLIS) return
+        lastOsmSpeedAttemptElapsedRealtime = now
+        osmSpeedLookupInFlight = true
+        val latitude = location.latitude
+        val longitude = location.longitude
+        scope.launch {
+            try {
+                val result = RoadSpeedResolver.findPostedSpeed(latitude, longitude)
+                if (result != null && currentSpeedLimit == null && driveId != null) {
+                    currentSpeedLimit = result.speedKph
+                    TrackingState.currentPostedSpeed.value = result.speedKph
+                    overSpeedAlertActive = false
+                }
+            } finally {
+                osmSpeedLookupInFlight = false
+            }
+        }
     }
 
     private fun checkAutomaticBackup(actualSpeedKph: Float?) {
@@ -262,7 +292,6 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         val travelBearing = currentTravelBearing
         val difference = if (savedBearing != null && travelBearing != null) bearingDifference(savedBearing, travelBearing) else null
 
-        // Existing markers without enough historical track data retain their legacy behaviour.
         val sameDirection = difference == null || difference <= SAME_DIRECTION_TOLERANCE_DEGREES
         val reverseDirection = difference != null && difference >= REVERSE_DIRECTION_MIN_DEGREES
 

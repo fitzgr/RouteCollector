@@ -34,5 +34,9 @@
         <service
             android:name=".service.CollectorOverlayService"
             android:exported="false" />
+
+        <service
+            android:name=".service.RouteMarkerMapOverlayService"
+            android:exported="false" />
     </application>
 </manifest>

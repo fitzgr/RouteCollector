@@ -22,6 +22,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.util.Locale
+import kotlin.math.abs
 
 class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     companion object {
@@ -37,6 +38,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val PREF_SPEED_TOLERANCE_PREFIX = "speed_tolerance_"
         private const val NO_DRIVING_SPEED_KPH = 5f
         private const val AUTO_BACKUP_STOPPED_MILLIS = 10 * 60 * 1000L
+        private const val SAME_DIRECTION_TOLERANCE_DEGREES = 60f
+        private const val REVERSE_DIRECTION_MIN_DEGREES = 120f
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -50,11 +53,15 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private val announcedMarkerIds = mutableSetOf<Long>()
     private val warnedCameraMarkerIds = mutableSetOf<Long>()
     private val verifiedCameraMarkerIds = mutableSetOf<Long>()
+    private val passiveReverseMarkerIds = mutableSetOf<Long>()
     private val previousMarkerDistances = mutableMapOf<Long, Float>()
+    private val markerBearingCache = mutableMapOf<Long, Float?>()
     private var currentSpeedLimit: Int? = null
     private var overSpeedAlertActive = false
     private var stoppedSinceElapsedRealtime: Long? = null
     private var autoBackupDoneForCurrentStop = false
+    private var previousLocationForBearing: Location? = null
+    private var currentTravelBearing: Float? = null
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -64,6 +71,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
                 TrackingState.latestLon.value = location.longitude
                 val actualSpeedKph = if (location.hasSpeed()) location.speed * 3.6f else null
                 TrackingState.latestSpeedKph.value = actualSpeedKph
+                updateTravelBearing(location, actualSpeedKph)
                 checkOverSpeedThreshold(actualSpeedKph)
                 checkAutomaticBackup(actualSpeedKph)
                 scope.launch {
@@ -106,13 +114,18 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
                     announcedMarkerIds.clear()
                     warnedCameraMarkerIds.clear()
                     verifiedCameraMarkerIds.clear()
+                    passiveReverseMarkerIds.clear()
                     previousMarkerDistances.clear()
+                    markerBearingCache.clear()
+                    previousLocationForBearing = null
+                    currentTravelBearing = null
                     currentSpeedLimit = null
                     overSpeedAlertActive = false
                     stoppedSinceElapsedRealtime = null
                     autoBackupDoneForCurrentStop = false
                     TrackingState.currentPostedSpeed.value = null
                     TrackingState.latestSpeedKph.value = null
+                    TrackingState.latestBearingDegrees.value = null
                     TrackingState.activeDriveId.value = it
                     startForeground(NOTIFICATION_ID, buildNotification())
                     beginUpdates()
@@ -135,6 +148,18 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         client.requestLocationUpdates(request, callback, mainLooper)
     }
 
+    private fun updateTravelBearing(location: Location, actualSpeedKph: Float?) {
+        if (actualSpeedKph != null && actualSpeedKph > NO_DRIVING_SPEED_KPH) {
+            currentTravelBearing = when {
+                location.hasBearing() -> normalizeBearing(location.bearing)
+                previousLocationForBearing != null -> normalizeBearing(previousLocationForBearing!!.bearingTo(location))
+                else -> currentTravelBearing
+            }
+            TrackingState.latestBearingDegrees.value = currentTravelBearing
+        }
+        previousLocationForBearing = Location(location)
+    }
+
     private fun checkAutomaticBackup(actualSpeedKph: Float?) {
         val driving = actualSpeedKph != null && actualSpeedKph > NO_DRIVING_SPEED_KPH
         if (driving) {
@@ -151,18 +176,15 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         }
         if (autoBackupDoneForCurrentStop || now - stoppedSince < AUTO_BACKUP_STOPPED_MILLIS) return
 
-        // Latch before launching so repeated GPS callbacks cannot create duplicate backups.
         autoBackupDoneForCurrentStop = true
         scope.launch {
             try {
                 val id = driveId ?: return@launch
-                // Close the drive before exporting so the backup records it as completed.
                 dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) }
                 val fileName = RouteDataExporter.exportToDownloads(this@DriveTrackingService, dao, automatic = true)
                 TrackingState.postDriverAlert("Route backed up and drive ended after 10 minutes stopped: $fileName", kind = "auto_backup")
                 finishAfterAutomaticBackup()
             } catch (_: Exception) {
-                // Allow another attempt on the next location update if writing the backup failed.
                 autoBackupDoneForCurrentStop = false
                 TrackingState.postDriverAlert("Automatic route data backup failed", kind = "auto_backup_error")
             }
@@ -176,10 +198,11 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         overSpeedAlertActive = false
         stoppedSinceElapsedRealtime = null
         previousMarkerDistances.clear()
+        markerBearingCache.clear()
         TrackingState.activeDriveId.value = null
         TrackingState.currentPostedSpeed.value = null
         TrackingState.latestSpeedKph.value = null
-        // Also remove the floating collector so a new trip requires reopening Route Collector.
+        TrackingState.latestBearingDegrees.value = null
         stopService(Intent(this, CollectorOverlayService::class.java))
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -207,7 +230,6 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             overSpeedAlertActive = true
             speak("Speed threshold exceeded")
         } else if (!overThreshold) {
-            // Re-arm only after the vehicle returns to or below the configured threshold.
             overSpeedAlertActive = false
         }
     }
@@ -227,15 +249,45 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             previousMarkerDistances[fact.id] = distance
 
             when (fact.kind) {
-                "speed" -> handleSpeedFact(fact, distance, approaching)
+                "speed", "speed_advance" -> handleDirectionalSpeedFact(fact, distance, approaching)
                 "red_light_camera", "camera" -> handleRedLightCamera(fact, distance, approaching, cameraWarningMetres)
                 else -> handleZoneFact(fact, distance, approaching)
             }
         }
     }
 
-    private fun handleSpeedFact(fact: MarkerEntity, distance: Float, approaching: Boolean) {
+    private suspend fun handleDirectionalSpeedFact(fact: MarkerEntity, distance: Float, approaching: Boolean) {
         val targetSpeed = parseSpeed(fact.note) ?: return
+        val savedBearing = markerBearing(fact)
+        val travelBearing = currentTravelBearing
+        val difference = if (savedBearing != null && travelBearing != null) bearingDifference(savedBearing, travelBearing) else null
+
+        // Existing markers without enough historical track data retain their legacy behaviour.
+        val sameDirection = difference == null || difference <= SAME_DIRECTION_TOLERANCE_DEGREES
+        val reverseDirection = difference != null && difference >= REVERSE_DIRECTION_MIN_DEGREES
+
+        if (reverseDirection) {
+            if (approaching && distance <= ACTIVE_ZONE_RADIUS_METRES && fact.id !in passiveReverseMarkerIds) {
+                passiveReverseMarkerIds += fact.id
+                val label = if (fact.kind == "speed_advance") "advance speed sign" else "speed zone marker"
+                TrackingState.postDriverAlert(
+                    "Opposite-direction $label: $targetSpeed km/h — informational only",
+                    kind = "directional_speed_info",
+                    markerId = fact.id
+                )
+            }
+            return
+        }
+        if (!sameDirection) return
+
+        if (fact.kind == "speed_advance") {
+            if (approaching && distance <= ACTIVE_ZONE_RADIUS_METRES && fact.id !in announcedMarkerIds) {
+                announcedMarkerIds += fact.id
+                speak("Speed reduction to $targetSpeed ahead")
+            }
+            return
+        }
+
         val current = currentSpeedLimit
         if (
             current != null && targetSpeed < current && fact.id !in warnedReductionMarkerIds &&
@@ -248,10 +300,34 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             announcedMarkerIds += fact.id
             currentSpeedLimit = targetSpeed
             TrackingState.currentPostedSpeed.value = targetSpeed
-            // A new posted-speed zone gets a fresh over-speed evaluation.
             overSpeedAlertActive = false
             speak("$targetSpeed kilometre zone active")
         }
+    }
+
+    private suspend fun markerBearing(fact: MarkerEntity): Float? {
+        if (markerBearingCache.containsKey(fact.id)) return markerBearingCache[fact.id]
+        val points = dao.pointsBeforeMarker(fact.driveId, fact.timestamp)
+        val bearing = if (points.size >= 2) {
+            val newer = points[0]
+            val older = points[1]
+            val result = FloatArray(1)
+            Location.distanceBetween(older.latitude, older.longitude, newer.latitude, newer.longitude, result)
+            if (result[0] >= 3f) {
+                val from = Location("marker-history").apply { latitude = older.latitude; longitude = older.longitude }
+                val to = Location("marker-history").apply { latitude = newer.latitude; longitude = newer.longitude }
+                normalizeBearing(from.bearingTo(to))
+            } else null
+        } else null
+        markerBearingCache[fact.id] = bearing
+        return bearing
+    }
+
+    private fun normalizeBearing(value: Float): Float = ((value % 360f) + 360f) % 360f
+
+    private fun bearingDifference(a: Float, b: Float): Float {
+        val raw = abs(normalizeBearing(a) - normalizeBearing(b))
+        return if (raw > 180f) 360f - raw else raw
     }
 
     private fun handleZoneFact(fact: MarkerEntity, distance: Float, approaching: Boolean) {
@@ -306,9 +382,11 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         stoppedSinceElapsedRealtime = null
         autoBackupDoneForCurrentStop = false
         previousMarkerDistances.clear()
+        markerBearingCache.clear()
         TrackingState.activeDriveId.value = null
         TrackingState.currentPostedSpeed.value = null
         TrackingState.latestSpeedKph.value = null
+        TrackingState.latestBearingDegrees.value = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

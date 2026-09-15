@@ -9,17 +9,12 @@ import android.location.Location
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
-import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.MediaStore
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -63,16 +58,12 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     private lateinit var audioManager: AudioManager
     private var overlayView: View? = null
     private var audioFocusRequest: AudioFocusRequest? = null
-    private var speechRecognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val dao by lazy { AppDatabase.get(this).dao() }
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var handsFreeEnabled = true
-    private var suppressRestartUntilSpeechDone = false
     private var visualAlertsEnabled = true
-    private var listeningStatus: TextView? = null
     private var visualAlertView: TextView? = null
     private var speedStatusView: TextView? = null
     private var settingsPanel: LinearLayout? = null
@@ -89,7 +80,6 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         visualAlertsEnabled = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_VISUAL_ALERTS, true)
         tts = TextToSpeech(this, this)
-        setupSpeechRecognizer()
         scope.launch { TrackingState.driverAlert.collect { alert -> if (alert != null) mainHandler.post { handleDriverAlert(alert) } } }
         scope.launch {
             combine(TrackingState.currentPostedSpeed, TrackingState.latestSpeedKph) { posted, actual -> posted to actual }
@@ -102,11 +92,6 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         if (status == TextToSpeech.SUCCESS) {
             tts?.language = Locale.CANADA
             tts?.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
-            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) = Unit
-                override fun onError(utteranceId: String?) = releaseAudioFocusAndResumeListening()
-                override fun onDone(utteranceId: String?) = releaseAudioFocusAndResumeListening()
-            })
             ttsReady = true
         }
     }
@@ -126,34 +111,27 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         titleRow.addView(title); titleRow.addView(settings); titleRow.addView(hide)
         speedStatusView = TextView(this).apply { setTextColor(0xFFFFFFFF.toInt()); textSize = 16f; setPadding(6, 6, 6, 6); text = "Posted --   Actual --" }
         activeZonesPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        listeningStatus = TextView(this).apply { text = "🎙 Route: starting…"; setTextColor(0xFFB8E986.toInt()); textSize = 12f }
-        val grammar = TextView(this).apply { text = "Route <action> ::= speed <limit> | red light camera | community/senior safety zone <start|end> | undo"; setTextColor(0xFFC8C8C8.toInt()); textSize = 10f }
         visualAlertView = TextView(this).apply { visibility = View.GONE; setTextColor(0xFFFFFFFF.toInt()); setBackgroundColor(0xFF37474F.toInt()); setPadding(10, 7, 10, 7); textSize = 13f }
         verificationActions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; visibility = View.GONE
-            addView(Button(this@CollectorOverlayService).apply { text = "Keep"; setOnClickListener { keepVerifiedCamera() } })
-            addView(Button(this@CollectorOverlayService).apply { text = "Remove"; setOnClickListener { removeVerifiedCamera() } })
+            addView(Button(this@CollectorOverlayService).apply { text = "Keep camera"; setOnClickListener { keepVerifiedCamera() } })
+            addView(Button(this@CollectorOverlayService).apply { text = "Remove camera"; setOnClickListener { removeVerifiedCamera() } })
         }
         val quickRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val handsFree = Button(this).apply { text = "🎙 ON" }
         val redLightCamera = Button(this).apply { text = "🚦 Camera"; setOnClickListener { markRedLightCamera() } }
         val speedMarker = Button(this).apply { text = "Speed" }
-        quickRow.addView(handsFree); quickRow.addView(redLightCamera); quickRow.addView(speedMarker)
+        quickRow.addView(redLightCamera); quickRow.addView(speedMarker)
         val communityRow = buildZoneRow("Community safety zone", { saveRoadFact("community_safety_zone_start", "Community safety zone start") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "community"; acknowledge("Community safety zone start marked") } }, { saveRoadFact("community_safety_zone_end", "Community safety zone end") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"; acknowledge("Community safety zone end marked") } })
         val seniorRow = buildZoneRow("Senior safety zone", { saveRoadFact("senior_safety_zone_start", "Senior safety zone start") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "senior"; acknowledge("Senior safety zone start marked") } }, { saveRoadFact("senior_safety_zone_end", "Senior safety zone end") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"; acknowledge("Senior safety zone end marked") } })
         val undo = Button(this).apply { text = "↶ Undo"; setOnClickListener { undoLatestMarker() } }
         speedMarkerPanel = buildSpeedMarkerPanel(); settingsPanel = buildSettingsPanel()
 
-        handsFree.setOnClickListener {
-            handsFreeEnabled = !handsFreeEnabled; handsFree.text = if (handsFreeEnabled) "🎙 ON" else "🎙 OFF"
-            if (handsFreeEnabled) { listeningStatus?.text = "🎙 Route: listening"; startListeningSoon(150) } else { speechRecognizer?.cancel(); listeningStatus?.text = "🎙 Route: off" }
-        }
         speedMarker.setOnClickListener {
             if (speedMarkerPanel?.visibility != View.VISIBLE) selectCurrentPostedSpeed()
             speedMarkerPanel?.visibility = if (speedMarkerPanel?.visibility == View.VISIBLE) View.GONE else View.VISIBLE
         }
         settings.setOnClickListener { settingsPanel?.visibility = if (settingsPanel?.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
-        panel.addView(titleRow); panel.addView(speedStatusView); panel.addView(activeZonesPanel); panel.addView(listeningStatus); panel.addView(grammar); panel.addView(visualAlertView); panel.addView(verificationActions); panel.addView(quickRow); panel.addView(speedMarkerPanel); panel.addView(communityRow); panel.addView(seniorRow); panel.addView(undo); panel.addView(settingsPanel)
+        panel.addView(titleRow); panel.addView(speedStatusView); panel.addView(activeZonesPanel); panel.addView(visualAlertView); panel.addView(verificationActions); panel.addView(quickRow); panel.addView(speedMarkerPanel); panel.addView(communityRow); panel.addView(seniorRow); panel.addView(undo); panel.addView(settingsPanel)
 
         val params = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.END; x = 12; y = 100 }
         var startX = 0; var startY = 0; var touchX = 0f; var touchY = 0f
@@ -166,7 +144,6 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         }
         overlayView = panel; windowManager.addView(panel, params)
         updateSpeedStatus(TrackingState.currentPostedSpeed.value, TrackingState.latestSpeedKph.value); refreshActiveZones()
-        if (handsFreeEnabled) startListeningSoon(300)
     }
 
     private fun buildZoneRow(label: String, onStart: () -> Unit, onEnd: () -> Unit) = LinearLayout(this).apply {
@@ -273,37 +250,6 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         view.setTextColor(if (warning) 0xFFFFB74D.toInt() else 0xFFFFFFFF.toInt())
     }
 
-    private fun setupSpeechRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) return
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply { setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) { listeningStatus?.text = "🎙 Route: listening" }; override fun onBeginningOfSpeech() { listeningStatus?.text = "🎙 Route: hearing…" }; override fun onRmsChanged(rmsdB: Float) = Unit; override fun onBufferReceived(buffer: ByteArray?) = Unit; override fun onEndOfSpeech() { listeningStatus?.text = "🎙 Route: processing…" }
-            override fun onError(error: Int) { if (handsFreeEnabled && !suppressRestartUntilSpeechDone) startListeningSoon(700) }
-            override fun onResults(results: Bundle?) { val phrases = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty(); val handled = phrases.firstNotNullOfOrNull { parseVoiceCommand(it) }; if (handled == null && handsFreeEnabled && !suppressRestartUntilSpeechDone) startListeningSoon(400) }
-            override fun onPartialResults(partialResults: Bundle?) = Unit; override fun onEvent(eventType: Int, params: Bundle?) = Unit
-        }) }
-    }
-
-    private fun startListeningSoon(delayMs: Long) { mainHandler.postDelayed({ if (!handsFreeEnabled || suppressRestartUntilSpeechDone || overlayView == null) return@postDelayed; val recognizer = speechRecognizer ?: return@postDelayed; val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply { putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM); putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.CANADA.toLanguageTag()); putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false); putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5) }; try { recognizer.startListening(intent) } catch (_: Exception) { startListeningSoon(1000) } }, delayMs) }
-
-    private fun parseVoiceCommand(raw: String): String? {
-        val normalized = raw.lowercase(Locale.CANADA).trim().replace(Regex("[,.!?]"), ""); if (!normalized.startsWith("route ")) return null; val command = normalized.removePrefix("route ").trim(); val speed = extractSpeed(command)
-        if (command.startsWith("speed") && speed != null) { val advance = command.contains("ahead") || command.contains("advance"); val kind = if (advance) "speed_advance" else "speed"; val note = if (advance) "Speed limit $speed advance sign" else "Speed limit $speed"; performVoiceSave(kind, note, if (advance) "$speed kilometre advance sign marked" else "$speed kilometre zone marked") { if (!advance) TrackingState.currentPostedSpeed.value = speed }; return "speed" }
-        if (command.contains("red light camera")) { markRedLightCamera(); return "red_light_camera" }
-        if (command.contains("community safety zone") && command.containsAny("start", "begin", "enter")) { performVoiceSave("community_safety_zone_start", "Community safety zone start", "Community safety zone start marked") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "community" }; return "community_start" }
-        if (command.contains("community safety zone") && command.containsAny("end", "exit", "leave")) { performVoiceSave("community_safety_zone_end", "Community safety zone end", "Community safety zone end marked") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community" }; return "community_end" }
-        if (command.contains("senior safety zone") && command.containsAny("start", "begin", "enter")) { performVoiceSave("senior_safety_zone_start", "Senior safety zone start", "Senior safety zone start marked") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "senior" }; return "senior_start" }
-        if (command.contains("senior safety zone") && command.containsAny("end", "exit", "leave")) { performVoiceSave("senior_safety_zone_end", "Senior safety zone end", "Senior safety zone end marked") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior" }; return "senior_end" }
-        if (command == "undo" || command.contains("remove last") || command.contains("delete last")) { suppressRestartUntilSpeechDone = true; speechRecognizer?.cancel(); undoLatestMarker(); return "undo" }
-        if (command.contains("clear speed") || command.contains("clear speed zone")) { clearSpeedZone(); return "clear_speed" }
-        if (command.contains("remove camera") && activeVerificationMarkerId != null) { removeVerifiedCamera(); return "remove_camera" }
-        if (command.contains("keep camera") && activeVerificationMarkerId != null) { keepVerifiedCamera(); return "keep_camera" }
-        return null
-    }
-
-    private fun String.containsAny(vararg values: String) = values.any { contains(it) }
-    private fun extractSpeed(command: String): Int? { Regex("\\b(40|50|60|70|80|90|100|110)\\b").find(command)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }; val words = mapOf("forty" to 40, "fifty" to 50, "sixty" to 60, "seventy" to 70, "eighty" to 80, "ninety" to 90, "one hundred" to 100, "one ten" to 110, "one hundred ten" to 110); return words.entries.firstOrNull { it.key in command }?.value }
-    private fun performVoiceSave(kind: String, note: String, confirmation: String, afterSave: () -> Unit = {}) { suppressRestartUntilSpeechDone = true; speechRecognizer?.cancel(); saveRoadFact(kind, note) { afterSave(); acknowledge(confirmation) } }
-
     private fun saveRoadFact(kind: String, note: String, onSaved: () -> Unit = {}) {
         val driveId = TrackingState.activeDriveId.value ?: run { acknowledge("No active drive"); return }
         scope.launch {
@@ -326,7 +272,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun markRedLightCamera() {
-        suppressRestartUntilSpeechDone = true; speechRecognizer?.cancel(); val driveId = TrackingState.activeDriveId.value ?: run { acknowledge("No active drive"); return }
+        val driveId = TrackingState.activeDriveId.value ?: run { acknowledge("No active drive"); return }
         scope.launch {
             val point = dao.latestPoint(driveId); if (point == null) { launch(Dispatchers.Main) { acknowledge("Waiting for GPS") }; return@launch }
             launch(Dispatchers.Main) { showVisualAlert("Finding nearest intersection…") }
@@ -342,10 +288,14 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     private fun keepVerifiedCamera() { activeVerificationMarkerId = null; verificationActions?.visibility = View.GONE; acknowledge("Red light camera kept") }
     private fun removeVerifiedCamera() { val markerId = activeVerificationMarkerId ?: return; activeVerificationMarkerId = null; verificationActions?.visibility = View.GONE; scope.launch { val deleted = dao.deleteMarker(markerId); launch(Dispatchers.Main) { acknowledge(if (deleted > 0) "Red light camera removed" else "Camera marker not found") } } }
 
-    private fun acknowledge(text: String) { TrackingState.postDriverAlert(text); suppressRestartUntilSpeechDone = true; speechRecognizer?.cancel(); if (!ttsReady) { suppressRestartUntilSpeechDone = false; if (handsFreeEnabled) startListeningSoon(500); return }; requestTransientAudioFocus(); tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "overlay-${System.currentTimeMillis()}") }
+    private fun acknowledge(text: String) {
+        TrackingState.postDriverAlert(text)
+        if (!ttsReady) return
+        requestTransientAudioFocus()
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "overlay-${System.currentTimeMillis()}")
+    }
     private fun showVisualAlert(text: String) { if (!visualAlertsEnabled) return; visualAlertView?.apply { this.text = text; visibility = View.VISIBLE }; mainHandler.removeCallbacks(clearVisualAlert); mainHandler.postDelayed(clearVisualAlert, 4_000L) }
     private fun requestTransientAudioFocus() { audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }; val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()).setOnAudioFocusChangeListener { }.build(); audioFocusRequest = request; audioManager.requestAudioFocus(request) }
-    private fun releaseAudioFocusAndResumeListening() { mainHandler.post { audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }; audioFocusRequest = null; suppressRestartUntilSpeechDone = false; if (handsFreeEnabled) startListeningSoon(450) } }
 
     private fun exportRouteData() {
         scope.launch {
@@ -356,6 +306,6 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
-    override fun onDestroy() { handsFreeEnabled = false; mainHandler.removeCallbacksAndMessages(null); speechRecognizer?.cancel(); speechRecognizer?.destroy(); speechRecognizer = null; overlayView?.let { windowManager.removeView(it) }; overlayView = null; listeningStatus = null; visualAlertView = null; speedStatusView = null; activeZonesPanel = null; speedSpinner = null; tts?.stop(); tts?.shutdown(); audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }; scope.cancel(); super.onDestroy() }
+    override fun onDestroy() { mainHandler.removeCallbacksAndMessages(null); overlayView?.let { windowManager.removeView(it) }; overlayView = null; visualAlertView = null; speedStatusView = null; activeZonesPanel = null; speedSpinner = null; tts?.stop(); tts?.shutdown(); audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }; scope.cancel(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 }

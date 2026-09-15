@@ -14,6 +14,7 @@ object TrackingState {
     val latestLat = MutableStateFlow<Double?>(null)
     val latestLon = MutableStateFlow<Double?>(null)
     val latestSpeedKph = MutableStateFlow<Float?>(null)
+    val latestBearingDegrees = MutableStateFlow<Float?>(null)
     val currentPostedSpeed = MutableStateFlow<Int?>(null)
     val driverAlert = MutableStateFlow<DriverAlert?>(null)
 

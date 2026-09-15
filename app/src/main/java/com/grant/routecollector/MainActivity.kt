@@ -23,6 +23,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.grant.routecollector.data.*
 import com.grant.routecollector.service.CollectorOverlayService
 import com.grant.routecollector.service.DriveTrackingService
+import com.grant.routecollector.service.RouteMarkerMapOverlayService
 import com.grant.routecollector.ui.RouteMap
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -51,13 +52,11 @@ private fun RouteCollectorScreen() {
     val markersFlow = remember(effectiveDriveId) { effectiveDriveId?.let { dao.observeMarkers(it) } ?: flowOf(emptyList()) }
     val points by pointsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val markers by markersFlow.collectAsStateWithLifecycle(initialValue = emptyList())
-
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
 
     LaunchedEffect(Unit) {
         val wanted = buildList {
-            add(Manifest.permission.ACCESS_FINE_LOCATION)
-            add(Manifest.permission.RECORD_AUDIO)
+            add(Manifest.permission.ACCESS_FINE_LOCATION); add(Manifest.permission.RECORD_AUDIO)
             if (android.os.Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
         }.filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
         if (wanted.isNotEmpty()) permissionLauncher.launch(wanted.toTypedArray())
@@ -69,41 +68,30 @@ private fun RouteCollectorScreen() {
             return
         }
         context.startService(Intent(context, CollectorOverlayService::class.java).apply { action = CollectorOverlayService.ACTION_SHOW })
+        context.startService(Intent(context, RouteMarkerMapOverlayService::class.java).apply { action = RouteMarkerMapOverlayService.ACTION_SHOW })
         val mapsIntent = context.packageManager.getLaunchIntentForPackage("com.google.android.apps.maps")
-        if (mapsIntent != null) context.startActivity(mapsIntent)
-        else context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0")))
+        if (mapsIntent != null) context.startActivity(mapsIntent) else context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0")))
     }
 
     Scaffold(topBar = { TopAppBar(title = { Text("Route Collector") }) }) { padding ->
         Column(Modifier.padding(padding).padding(12.dp).fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             RouteMap(points = points, markers = markers, modifier = Modifier.fillMaxWidth().weight(1f))
-
             if (activeDriveId == null) {
                 Button(onClick = {
                     scope.launch {
-                        val id = dao.insertDrive(DriveEntity(startedAt = System.currentTimeMillis()))
-                        selectedDriveId = id
-                        val intent = Intent(context, DriveTrackingService::class.java).apply {
-                            action = DriveTrackingService.ACTION_START
-                            putExtra(DriveTrackingService.EXTRA_DRIVE_ID, id)
-                        }
+                        val id = dao.insertDrive(DriveEntity(startedAt = System.currentTimeMillis())); selectedDriveId = id
+                        val intent = Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_START; putExtra(DriveTrackingService.EXTRA_DRIVE_ID, id) }
                         ContextCompat.startForegroundService(context, intent)
                     }
                 }, modifier = Modifier.fillMaxWidth()) { Text("Start drive") }
             } else {
-                Text(
-                    "Hands-free collection uses the wake word ‘Route’. Example: Route speed 60.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Button(onClick = { launchMapsWithOverlay() }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Open Google Maps + overlay")
-                }
+                Text("Hands-free collection uses the wake word ‘Route’. Example: Route speed 60.", style = MaterialTheme.typography.bodyMedium)
+                Button(onClick = { launchMapsWithOverlay() }, modifier = Modifier.fillMaxWidth()) { Text("Open Google Maps + overlay") }
                 Button(onClick = {
                     context.startService(Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_STOP })
-                    context.stopService(Intent(context, CollectorOverlayService::class.java))
+                    context.stopService(Intent(context, CollectorOverlayService::class.java)); context.stopService(Intent(context, RouteMarkerMapOverlayService::class.java))
                 }, modifier = Modifier.fillMaxWidth()) { Text("Stop drive") }
             }
-
             Text("Recorded drives", style = MaterialTheme.typography.titleMedium)
             LazyColumn(Modifier.heightIn(max = 180.dp)) {
                 items(drives, key = { it.id }) { drive ->

@@ -10,11 +10,7 @@ import android.graphics.PixelFormat
 import android.graphics.drawable.Drawable
 import android.os.IBinder
 import android.view.Gravity
-import android.view.MotionEvent
-import android.view.View
 import android.view.WindowManager
-import android.widget.LinearLayout
-import android.widget.TextView
 import com.grant.routecollector.data.AppDatabase
 import com.grant.routecollector.data.MarkerEntity
 import com.grant.routecollector.data.TrackingState
@@ -29,6 +25,11 @@ import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 
+/**
+ * Borderless route-marker map that visually forms the lower portion of the
+ * Route Collector overlay. There is deliberately no independent title bar,
+ * background panel, drag handle, or other window chrome.
+ */
 class RouteMarkerMapOverlayService : Service() {
     companion object {
         const val ACTION_SHOW = "routecollector.MARKER_MAP_SHOW"
@@ -38,7 +39,6 @@ class RouteMarkerMapOverlayService : Service() {
     private lateinit var windowManager: WindowManager
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val dao by lazy { AppDatabase.get(this).dao() }
-    private var root: View? = null
     private var mapView: MapView? = null
     private var latestMarkers: List<MarkerEntity> = emptyList()
 
@@ -62,46 +62,31 @@ class RouteMarkerMapOverlayService : Service() {
     }
 
     private fun showOverlay() {
-        if (root != null) return
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xE6202124.toInt())
-        }
-        val header = TextView(this).apply {
-            text = "Route markers  •  drag"
-            setTextColor(Color.WHITE)
-            textSize = 11f
-            setPadding(8, 4, 8, 4)
-        }
+        if (mapView != null) return
         val map = MapView(this).apply {
-            setMultiTouchControls(true)
+            setMultiTouchControls(false)
+            isClickable = false
+            isFocusable = false
             controller.setZoom(17.5)
-            layoutParams = LinearLayout.LayoutParams(360, 260)
         }
-        container.addView(header)
-        container.addView(map)
 
+        // Align directly below the compact Route Collector controls. The map
+        // has no independent window chrome, so to the driver it reads as one
+        // Route Collector overlay rather than a second "Route markers" panel.
         val params = WindowManager.LayoutParams(
-            360, WindowManager.LayoutParams.WRAP_CONTENT,
+            360,
+            260,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.BOTTOM or Gravity.END
+            gravity = Gravity.TOP or Gravity.END
             x = 12
-            y = 24
+            y = 430
         }
-        var startX = 0; var startY = 0; var touchX = 0f; var touchY = 0f
-        header.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> { startX = params.x; startY = params.y; touchX = event.rawX; touchY = event.rawY; true }
-                MotionEvent.ACTION_MOVE -> { params.x = startX - (event.rawX - touchX).toInt(); params.y = startY - (event.rawY - touchY).toInt(); windowManager.updateViewLayout(container, params); true }
-                else -> true
-            }
-        }
-        root = container
+
         mapView = map
-        windowManager.addView(container, params)
+        windowManager.addView(map, params)
         map.onResume()
         render(MapState(latestMarkers, TrackingState.latestLat.value, TrackingState.latestLon.value, TrackingState.latestBearingDegrees.value))
     }
@@ -115,25 +100,23 @@ class RouteMarkerMapOverlayService : Service() {
         map.mapOrientation = -(state.bearing ?: 0f)
         map.overlays.clear()
 
-        val user = Marker(map).apply {
+        map.overlays.add(Marker(map).apply {
             position = here
             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
             title = "You"
             icon = BadgeDrawable("●", 0xFF2196F3.toInt())
-        }
-        map.overlays.add(user)
+        })
 
         state.markers.asSequence()
             .filter { distanceMetres(lat, lon, it.latitude, it.longitude) <= 5_000f }
             .forEach { fact ->
-                val marker = Marker(map).apply {
+                map.overlays.add(Marker(map).apply {
                     position = GeoPoint(fact.latitude, fact.longitude)
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                     title = markerTitle(fact)
                     snippet = fact.note
                     icon = markerBadge(fact)
-                }
-                map.overlays.add(marker)
+                })
             }
         map.invalidate()
     }
@@ -170,8 +153,8 @@ class RouteMarkerMapOverlayService : Service() {
 
     override fun onDestroy() {
         mapView?.onPause()
-        root?.let { windowManager.removeView(it) }
-        root = null; mapView = null
+        mapView?.let { windowManager.removeView(it) }
+        mapView = null
         scope.cancel()
         super.onDestroy()
     }

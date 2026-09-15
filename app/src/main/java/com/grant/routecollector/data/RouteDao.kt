@@ -25,6 +25,9 @@ interface RouteDao {
     @Query("SELECT * FROM markers ORDER BY timestamp")
     suspend fun getAllMarkers(): List<MarkerEntity>
 
+    @Query("SELECT * FROM markers ORDER BY timestamp")
+    fun observeAllMarkers(): Flow<List<MarkerEntity>>
+
     @Query("SELECT * FROM drives WHERE id = :id LIMIT 1")
     suspend fun getDrive(id: Long): DriveEntity?
 
@@ -45,6 +48,9 @@ interface RouteDao {
 
     @Query("DELETE FROM markers WHERE id = (SELECT id FROM markers WHERE driveId = :driveId ORDER BY timestamp DESC LIMIT 1)")
     suspend fun deleteLatestMarker(driveId: Long): Int
+
+    @Query("SELECT * FROM markers WHERE kind = :kind AND latitude BETWEEN :minLat AND :maxLat AND longitude BETWEEN :minLon AND :maxLon")
+    suspend fun markersOfKindInBox(kind: String, minLat: Double, maxLat: Double, minLon: Double, maxLon: Double): List<MarkerEntity>
 
     @Query("SELECT * FROM markers WHERE kind IN ('speed', 'speed_advance', 'school_zone', 'school_zone_start', 'school_zone_end', 'community_safety_zone_start', 'community_safety_zone_end', 'senior_safety_zone_start', 'senior_safety_zone_end', 'camera', 'red_light_camera') ORDER BY timestamp DESC")
     suspend fun getSpokenRoadFacts(): List<MarkerEntity>

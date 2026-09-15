@@ -56,7 +56,7 @@ private fun RouteCollectorScreen() {
 
     LaunchedEffect(Unit) {
         val wanted = buildList {
-            add(Manifest.permission.ACCESS_FINE_LOCATION); add(Manifest.permission.RECORD_AUDIO)
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
             if (android.os.Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
         }.filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
         if (wanted.isNotEmpty()) permissionLauncher.launch(wanted.toTypedArray())
@@ -67,10 +67,20 @@ private fun RouteCollectorScreen() {
             context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
             return
         }
-        context.startService(Intent(context, CollectorOverlayService::class.java).apply { action = CollectorOverlayService.ACTION_SHOW })
-        context.startService(Intent(context, RouteMarkerMapOverlayService::class.java).apply { action = RouteMarkerMapOverlayService.ACTION_SHOW })
+
+        // The collector controls are the critical driving overlay. Start them
+        // independently and do not let the optional osmdroid marker surface
+        // prevent speed/camera/zone controls from appearing over Google Maps.
+        // The marker-map service is deliberately stopped here until it can be
+        // embedded without creating a second overlay/cache failure path.
+        context.stopService(Intent(context, RouteMarkerMapOverlayService::class.java))
+        context.startService(Intent(context, CollectorOverlayService::class.java).apply {
+            action = CollectorOverlayService.ACTION_SHOW
+        })
+
         val mapsIntent = context.packageManager.getLaunchIntentForPackage("com.google.android.apps.maps")
-        if (mapsIntent != null) context.startActivity(mapsIntent) else context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0")))
+        if (mapsIntent != null) context.startActivity(mapsIntent)
+        else context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0")))
     }
 
     Scaffold(topBar = { TopAppBar(title = { Text("Route Collector") }) }) { padding ->
@@ -85,7 +95,6 @@ private fun RouteCollectorScreen() {
                     }
                 }, modifier = Modifier.fillMaxWidth()) { Text("Start drive") }
             } else {
-                Text("Hands-free collection uses the wake word ‘Route’. Example: Route speed 60.", style = MaterialTheme.typography.bodyMedium)
                 Button(onClick = { launchMapsWithOverlay() }, modifier = Modifier.fillMaxWidth()) { Text("Open Google Maps + overlay") }
                 Button(onClick = {
                     context.startService(Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_STOP })

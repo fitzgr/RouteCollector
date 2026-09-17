@@ -120,7 +120,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         val redLightCamera = Button(this).apply { text = "🚦 Camera"; setOnClickListener { markRedLightCamera() } }
         val speedMarker = Button(this).apply { text = "Speed" }
         val deer = Button(this).apply { text = "🦌 Deer entering"; setOnClickListener { markDeerZoneEntering() } }
-        quickRow.addView(redLightCamera); quickRow.addView(speedMarker); quickRow.addView(deer)
+        quickRow.addView(redLightCamera); quickRow.addView(deer); quickRow.addView(speedMarker)
         val communityRow = buildZoneRow("Community safety zone", { saveRoadFact("community_safety_zone_start", "Community safety zone start") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "community"; acknowledge("Community safety zone start marked") } }, { saveRoadFact("community_safety_zone_end", "Community safety zone end") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"; acknowledge("Community safety zone end marked") } })
         val seniorRow = buildZoneRow("Senior safety zone", { saveRoadFact("senior_safety_zone_start", "Senior safety zone start") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "senior"; acknowledge("Senior safety zone start marked") } }, { saveRoadFact("senior_safety_zone_end", "Senior safety zone end") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"; acknowledge("Senior safety zone end marked") } })
         val undo = Button(this).apply { text = "↶ Undo"; setOnClickListener { undoLatestMarker() } }

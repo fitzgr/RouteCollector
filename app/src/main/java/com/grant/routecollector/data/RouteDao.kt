@@ -52,6 +52,15 @@ interface RouteDao {
     @Query("SELECT * FROM markers WHERE kind = :kind AND latitude BETWEEN :minLat AND :maxLat AND longitude BETWEEN :minLon AND :maxLon")
     suspend fun markersOfKindInBox(kind: String, minLat: Double, maxLat: Double, minLon: Double, maxLon: Double): List<MarkerEntity>
 
-    @Query("SELECT * FROM markers WHERE kind IN ('speed', 'speed_advance', 'school_zone', 'school_zone_start', 'school_zone_end', 'community_safety_zone_start', 'community_safety_zone_end', 'senior_safety_zone_start', 'senior_safety_zone_end', 'camera', 'red_light_camera') ORDER BY timestamp DESC")
+    @Query("SELECT * FROM markers WHERE kind = 'deer_zone_enter' ORDER BY timestamp")
+    suspend fun getDeerZoneMarkers(): List<MarkerEntity>
+
+    @Query("SELECT * FROM markers WHERE kind IN ('community_safety_zone_start', 'community_safety_zone_end') ORDER BY timestamp")
+    suspend fun getCommunitySafetyZoneMarkers(): List<MarkerEntity>
+
+    @Query("SELECT * FROM markers WHERE kind IN ('senior_safety_zone_start', 'senior_safety_zone_end') ORDER BY timestamp")
+    suspend fun getSeniorSafetyZoneMarkers(): List<MarkerEntity>
+
+    @Query("SELECT * FROM markers WHERE kind IN ('speed', 'speed_advance', 'school_zone', 'school_zone_start', 'school_zone_end', 'community_safety_zone_start', 'community_safety_zone_end', 'senior_safety_zone_start', 'senior_safety_zone_end', 'deer_zone_enter', 'camera', 'red_light_camera') ORDER BY timestamp DESC")
     suspend fun getSpokenRoadFacts(): List<MarkerEntity>
 }

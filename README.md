@@ -14,7 +14,7 @@ Route Collector records road facts on repeat routes while Google Maps remains av
 
 The compact overlay is designed for road testing and currently provides:
 
-- Current **Posted** speed and **Actual** GPS speed.
+- Current **Posted** or **Collected** speed source and **Actual** GPS speed, with the speed Clear action on the same row.
 - Configurable over-speed warning tolerance.
 - Primary quick actions ordered **🚦 Camera → 🦌 Deer entering → Speed**.
 - Collapsible speed-marker controls.
@@ -28,7 +28,7 @@ The compact overlay is designed for road testing and currently provides:
 
 ## Speed-zone collection and alerts
 
-The **Speed** panel supports posted speeds of 40, 50, 60, 70, 80, 90, 100, and 110 km/h. A tester selects the speed and records either:
+The **Speed** panel supports posted speeds of 40, 50, 60, 70, 80, 90, 100, and 110 km/h. Opening **Speed** preselects the current Posted/Collected speed (fallback 60 km/h) and resets the marker type to **Zone begins**. The selected speed remains visible while the panel is open. A tester records either:
 
 - **Zone begins** — the actual boundary where the new posted limit starts; or
 - **Advance sign** — the earlier sign warning that a different limit is coming.
@@ -107,29 +107,29 @@ When a camera is marked, Route Collector asks OpenStreetMap/Overpass for nearby 
 - Previously collected legacy `camera` markers remain readable.
 - The warning distance is configurable from **100–500 m** in 50 m steps; default is **200 m**.
 - Previously collected cameras can trigger an approaching-camera warning.
-- Near the camera, Route Collector can request verification and offer **Keep camera** or **Remove camera** so stale camera data can be corrected.
+- Near a known camera, Route Collector shows a temporary **Remove camera** action; if it is not used, it disappears automatically after the intersection.
 
 ## Spoken and visual driver alerts
 
 Route Collector uses Android Text-to-Speech for automatic route alerts and spoken capture acknowledgements. Current automatic alert categories include:
 
 ```text
-Speed threshold exceeded
-Speed reduction to <limit> ahead
-Speed reduction to <limit>
+Speeding
+Reduce to <limit> ahead
+Reduce to <limit>
 <limit> kilometre zone active
-Entering deer crossing area
-Leaving deer crossing area
-Entering community safety zone
-Leaving community safety zone
-Entering senior safety zone
-Leaving senior safety zone
+Deer crossing area
+Leaving deer area
+Entering community zone
+Leaving community zone
+Entering senior zone
+Leaving senior zone
 Red-light-camera approach / verification alerts
 ```
 
 Capture actions also provide spoken acknowledgements for speed markers, deer points/pairs, safety-zone boundaries, camera marking/verification, clearing/deleting zones, undo, and export operations.
 
-Visual alerts can be disabled independently while spoken alerts remain available. The overlay uses a dark alert surface and does not intentionally wake or brighten the screen.
+When music is active, spoken prompts pause playback, wait about 250 ms, speak at full TTS prompt volume, and resume playback when speech finishes. Visual alerts can be disabled independently while spoken alerts remain available. The overlay uses a dark alert surface and does not intentionally wake or brighten the screen.
 
 ## Direction and GPS tracking
 

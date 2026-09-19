@@ -5,6 +5,8 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.location.Location
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -128,7 +130,23 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         val quickRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val redLightCamera = Button(this).apply { text = "🚦 📷"; contentDescription = "Red light camera"; setOnClickListener { markRedLightCamera() } }
         val speedMarker = Button(this).apply { text = "Speed" }
-        val deer = Button(this).apply { text = "🦌 🚸"; contentDescription = "Deer crossing"; setOnClickListener { markDeerZoneEntering() } }
+        val deer = Button(this).apply {
+            text = "🦌"
+            textSize = 22f
+            setTextColor(Color.BLACK)
+            minWidth = 58
+            minHeight = 58
+            setPadding(10, 4, 10, 4)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(0xFFFFD600.toInt())
+                setStroke(3, Color.BLACK)
+                cornerRadius = 5f
+            }
+            rotation = 45f
+            contentDescription = "Deer crossing"
+            setOnClickListener { markDeerZoneEntering() }
+        }
         quickRow.addView(redLightCamera); quickRow.addView(deer); quickRow.addView(speedMarker)
         val communityRow = buildZoneRow("Community safety zone", { saveRoadFact("community_safety_zone_start", "Community safety zone start") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "community"; acknowledge("Community safety start marked") } }, { saveRoadFact("community_safety_zone_end", "Community safety zone end") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"; acknowledge("Community safety end marked") } })
         val seniorRow = buildZoneRow("Senior safety zone", { saveRoadFact("senior_safety_zone_start", "Senior safety zone start") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "senior"; acknowledge("Senior safety start marked") } }, { saveRoadFact("senior_safety_zone_end", "Senior safety zone end") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"; acknowledge("Senior safety end marked") } })

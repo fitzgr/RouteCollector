@@ -115,7 +115,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         val titleRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val title = TextView(this).apply { text = "Route Collector"; setTextColor(0xFFFFFFFF.toInt()); textSize = 14f; layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) }
         val settings = Button(this).apply { text = "⚙" }
-        val hide = Button(this).apply { text = "×"; setOnClickListener { stopSelf() } }
+        val hide = Button(this).apply { text = "History"; setOnClickListener { acknowledge("Open Route Collector for drive history") } }
         titleRow.addView(title); titleRow.addView(settings); titleRow.addView(hide)
         speedStatusRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         speedStatusView = TextView(this).apply { setTextColor(0xFFFFFFFF.toInt()); textSize = 16f; setPadding(6, 6, 6, 6); text = "Posted --   Actual --"; layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) }
@@ -130,21 +130,28 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         val quickRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val redLightCamera = Button(this).apply { text = "🚦 📷"; contentDescription = "Red light camera"; setOnClickListener { markRedLightCamera() } }
         val speedMarker = Button(this).apply { text = "Speed" }
-        val deer = Button(this).apply {
-            text = "🦌"
-            textSize = 22f
-            setTextColor(Color.BLACK)
-            minWidth = 58
-            minHeight = 58
-            setPadding(10, 4, 10, 4)
+        val deer = LinearLayout(this).apply {
+            gravity = Gravity.CENTER
+            minWidth = 62
+            minHeight = 62
+            setPadding(8, 8, 8, 8)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 setColor(0xFFFFD600.toInt())
                 setStroke(3, Color.BLACK)
-                cornerRadius = 5f
+                cornerRadius = 4f
             }
             rotation = 45f
             contentDescription = "Deer crossing"
+            isClickable = true
+            isFocusable = true
+            addView(TextView(this@CollectorOverlayService).apply {
+                text = "🦌"
+                textSize = 23f
+                setTextColor(Color.BLACK)
+                gravity = Gravity.CENTER
+                rotation = -45f
+            })
             setOnClickListener { markDeerZoneEntering() }
         }
         quickRow.addView(redLightCamera); quickRow.addView(deer); quickRow.addView(speedMarker)
@@ -225,10 +232,10 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
 
     private fun buildSpeedMarkerPanel(): LinearLayout {
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE; setPadding(8, 6, 8, 6); setBackgroundColor(0xFF151618.toInt()) }
-        panel.addView(TextView(this).apply { text = "Speed marker"; setTextColor(0xFFFFFFFF.toInt()); textSize = 12f })
+        panel.addView(TextView(this).apply { text = "Speed marker — choose values, then tap Set at the GPS point"; setTextColor(0xFFFFFFFF.toInt()); textSize = 12f })
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; val speeds = listOf(40, 50, 60, 70, 80, 90, 100, 110)
-        val localSpeedSpinner = Spinner(this).apply { adapter = ArrayAdapter(this@CollectorOverlayService, android.R.layout.simple_spinner_dropdown_item, speeds.map { "$it km/h" }); setSelection(speeds.indexOf(60)) }; speedSpinner = localSpeedSpinner
-        val typeSpinner = Spinner(this).apply { adapter = ArrayAdapter(this@CollectorOverlayService, android.R.layout.simple_spinner_dropdown_item, listOf("Zone begins", "Advance sign")); setSelection(0) }; speedTypeSpinner = typeSpinner
+        val localSpeedSpinner = Spinner(this).apply { adapter = ArrayAdapter(this@CollectorOverlayService, android.R.layout.simple_spinner_dropdown_item, speeds.map { "$it km/h" }); setSelection(speeds.indexOf(60)); prompt = "Speed" }; speedSpinner = localSpeedSpinner
+        val typeSpinner = Spinner(this).apply { adapter = ArrayAdapter(this@CollectorOverlayService, android.R.layout.simple_spinner_dropdown_item, listOf("Zone begins", "Advance sign")); setSelection(0); prompt = "Marker type" }; speedTypeSpinner = typeSpinner
         val submit = Button(this).apply { text = "Set"; setOnClickListener { val speed = speeds[localSpeedSpinner.selectedItemPosition]; val advance = typeSpinner.selectedItemPosition == 1; val kind = if (advance) "speed_advance" else "speed"; val note = if (advance) "Speed limit $speed advance sign" else "Speed limit $speed"; saveRoadFact(kind, note) { if (!advance) { TrackingState.currentPostedSpeed.value = speed; TrackingState.currentSpeedIsCollected.value = true }; acknowledge(if (advance) "$speed kilometre advance sign marked" else "$speed kilometre zone start marked") } } }
         row.addView(localSpeedSpinner, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)); row.addView(typeSpinner, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)); row.addView(submit); panel.addView(row); return panel
     }

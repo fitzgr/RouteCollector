@@ -16,7 +16,7 @@ The compact overlay is designed for road testing and currently provides:
 
 - Current **Posted** or **Collected** speed source and **Actual** GPS speed, with the speed Clear action on the same row.
 - Configurable over-speed warning tolerance.
-- Primary quick actions ordered **🚦 Camera → 🦌 Deer entering → Speed**.
+- Primary quick actions ordered **🚦 📷 → 🦌 🚸 → Speed**, using compact icon-only camera and deer-crossing buttons.
 - Collapsible speed-marker controls.
 - Community safety-zone start/end controls.
 - Senior safety-zone start/end controls.

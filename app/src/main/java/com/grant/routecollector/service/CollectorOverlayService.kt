@@ -126,9 +126,9 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
             addView(Button(this@CollectorOverlayService).apply { text = "Remove camera"; setOnClickListener { removeVerifiedCamera() } })
         }
         val quickRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val redLightCamera = Button(this).apply { text = "🚦 Camera"; setOnClickListener { markRedLightCamera() } }
+        val redLightCamera = Button(this).apply { text = "🚦 📷"; contentDescription = "Red light camera"; setOnClickListener { markRedLightCamera() } }
         val speedMarker = Button(this).apply { text = "Speed" }
-        val deer = Button(this).apply { text = "🦌 Deer entering"; setOnClickListener { markDeerZoneEntering() } }
+        val deer = Button(this).apply { text = "🦌 🚸"; contentDescription = "Deer crossing"; setOnClickListener { markDeerZoneEntering() } }
         quickRow.addView(redLightCamera); quickRow.addView(deer); quickRow.addView(speedMarker)
         val communityRow = buildZoneRow("Community safety zone", { saveRoadFact("community_safety_zone_start", "Community safety zone start") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "community"; acknowledge("Community safety start marked") } }, { saveRoadFact("community_safety_zone_end", "Community safety zone end") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"; acknowledge("Community safety end marked") } })
         val seniorRow = buildZoneRow("Senior safety zone", { saveRoadFact("senior_safety_zone_start", "Senior safety zone start") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "senior"; acknowledge("Senior safety start marked") } }, { saveRoadFact("senior_safety_zone_end", "Senior safety zone end") { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"; acknowledge("Senior safety end marked") } })

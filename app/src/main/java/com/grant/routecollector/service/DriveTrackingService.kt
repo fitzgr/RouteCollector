@@ -35,6 +35,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         const val ACTION_START = "routecollector.START"
         const val ACTION_STOP = "routecollector.STOP"
         const val ACTION_CLEAR_SPEED_ZONE = "routecollector.CLEAR_SPEED_ZONE"
+        const val ACTION_SPEAK = "routecollector.SPEAK"
+        const val EXTRA_SPEAK_TEXT = "speakText"
         const val EXTRA_DRIVE_ID = "driveId"
         private const val CHANNEL_ID = "drive_tracking"
         private const val NOTIFICATION_ID = 101
@@ -76,6 +78,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private var osmSpeedLookupInFlight = false
     private var speedZoneManuallyCleared = false
     private var musicPausedForPrompt = false
+    private val pendingSpeech = mutableListOf<String>()
+    private var speechInProgress = 0
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -90,7 +94,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     }
 
     override fun onCreate() { super.onCreate(); client = LocationServices.getFusedLocationProviderClient(this); audioManager = getSystemService(AUDIO_SERVICE) as AudioManager; tts = TextToSpeech(this, this); createChannel() }
-    override fun onInit(status: Int) { if (status == TextToSpeech.SUCCESS) { tts?.language = Locale.CANADA; tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() { override fun onStart(utteranceId: String?) = Unit; override fun onError(utteranceId: String?) { resumeMusicAfterPrompt() }; override fun onDone(utteranceId: String?) { resumeMusicAfterPrompt() } }); ttsReady = true } }
+    override fun onInit(status: Int) { if (status == TextToSpeech.SUCCESS) { tts?.language = Locale.CANADA; tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() { override fun onStart(utteranceId: String?) = Unit; override fun onError(utteranceId: String?) { resumeMusicAfterPrompt() }; override fun onDone(utteranceId: String?) { resumeMusicAfterPrompt() } }); ttsReady = true; val queued = pendingSpeech.toList(); pendingSpeech.clear(); queued.forEach { speak(it) } } }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -104,6 +108,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
                 }
             }
             ACTION_CLEAR_SPEED_ZONE -> clearSpeedZone()
+            ACTION_SPEAK -> intent.getStringExtra(EXTRA_SPEAK_TEXT)?.takeIf { it.isNotBlank() }?.let { speak(it) }
             ACTION_STOP -> stopTracking()
         }
         return START_NOT_STICKY
@@ -170,20 +175,27 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private fun parseSpeed(note: String): Int? = Regex("\\b(20|30|40|50|60|70|80|90|100|110|120)\\b").find(note)?.groupValues?.getOrNull(1)?.toIntOrNull()
     private fun speak(text: String) {
         TrackingState.postDriverAlert(text)
-        if (!ttsReady) return
-        val wasMusicActive = audioManager.isMusicActive
-        if (wasMusicActive) {
-            audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PAUSE))
-            audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PAUSE))
-            musicPausedForPrompt = true
+        if (!ttsReady) {
+            pendingSpeech += text
+            return
         }
+        if (speechInProgress == 0) {
+            val wasMusicActive = audioManager.isMusicActive
+            if (wasMusicActive) {
+                audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PAUSE))
+                audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PAUSE))
+                musicPausedForPrompt = true
+            }
+        }
+        speechInProgress += 1
         mainHandler.postDelayed({
             val params = android.os.Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f) }
             tts?.speak(text, TextToSpeech.QUEUE_ADD, params, "routecollector-" + System.currentTimeMillis())
         }, 250L)
     }
     private fun resumeMusicAfterPrompt() {
-        if (!musicPausedForPrompt) return
+        speechInProgress = (speechInProgress - 1).coerceAtLeast(0)
+        if (speechInProgress > 0 || !musicPausedForPrompt) return
         musicPausedForPrompt = false
         mainHandler.post {
             audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY))

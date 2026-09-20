@@ -52,6 +52,24 @@ fun RouteMap(
 
             val current = if (currentLat != null && currentLon != null) GeoPoint(currentLat, currentLon) else null
             if (current != null) {
+                val zoneColor = when {
+                    "community" in activeZones -> Color.rgb(46,125,50)
+                    "senior" in activeZones -> Color.rgb(106,76,147)
+                    postedSpeed != null -> Color.rgb(245,124,0)
+                    else -> null
+                }
+                zoneColor?.let { color ->
+                    map.overlays.add(Marker(map).apply {
+                        position = current
+                        title = when {
+                            "community" in activeZones -> "IN COMMUNITY ZONE"
+                            "senior" in activeZones -> "IN SENIOR ZONE"
+                            else -> "IN SPEED ZONE"
+                        }
+                        icon = activeZoneRing(color, map.context.resources.displayMetrics.density)
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    })
+                }
                 map.overlays.add(Marker(map).apply {
                     position = current
                     title = "You"
@@ -172,4 +190,12 @@ private fun emojiMarker(emoji: String, density: Float): Drawable {
         override fun getIntrinsicWidth() = size
         override fun getIntrinsicHeight() = size
     }.apply { setBounds(0, 0, size, size) }
+}
+
+
+private fun activeZoneRing(color: Int, density: Float): Drawable = GradientDrawable().apply {
+    shape = GradientDrawable.OVAL
+    setColor(Color.TRANSPARENT)
+    setStroke((6 * density).toInt(), color)
+    setSize((58 * density).toInt(), (58 * density).toInt())
 }

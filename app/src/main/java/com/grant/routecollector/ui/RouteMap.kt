@@ -31,6 +31,8 @@ fun RouteMap(
     currentLat: Double?,
     currentLon: Double?,
     travelBearing: Float?,
+    activeZones: Set<String>,
+    postedSpeed: Int?,
     modifier: Modifier = Modifier
 ) {
     AndroidView(

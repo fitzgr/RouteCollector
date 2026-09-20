@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -55,6 +56,9 @@ private fun RouteCollectorScreen() {
     var markerSpeed by remember { mutableStateOf(60) }
     var markerType by remember { mutableStateOf("Zone begins") }
     val activeZones by TrackingState.activeZoneKinds.collectAsStateWithLifecycle()
+    val travelBearing by TrackingState.latestBearingDegrees.collectAsStateWithLifecycle()
+    val latestLat by TrackingState.latestLat.collectAsStateWithLifecycle()
+    val latestLon by TrackingState.latestLon.collectAsStateWithLifecycle()
     fun speakPrompt(text: String) {
         context.startService(Intent(context, DriveTrackingService::class.java).apply {
             action = DriveTrackingService.ACTION_SPEAK
@@ -137,7 +141,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Community safety end marked" else "Community safety start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(1f)) {
+                        }, modifier = Modifier.weight(1f), colors = if ("community" in activeZones) ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White) else ButtonDefaults.buttonColors()) {
                             Text(if ("community" in activeZones) "Community ■" else "Community ▶")
                         }
                         Button(onClick = {
@@ -157,7 +161,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Senior safety end marked" else "Senior safety start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(1f)) {
+                        }, modifier = Modifier.weight(1f), colors = if ("senior" in activeZones) ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White) else ButtonDefaults.buttonColors()) {
                             Text(if ("senior" in activeZones) "Senior ■" else "Senior ▶")
                         }
                         Button(
@@ -248,6 +252,9 @@ private fun RouteCollectorScreen() {
                     RouteMap(
                         points = points,
                         markers = markers,
+                        currentLat = latestLat,
+                        currentLon = latestLon,
+                        travelBearing = travelBearing,
                         modifier = Modifier.fillMaxSize()
                     )
                 }

@@ -15,6 +15,7 @@ import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.media.AudioManager
+import android.media.ToneGenerator
 import android.view.KeyEvent
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
@@ -50,12 +51,15 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val SAME_DIRECTION_TOLERANCE_DEGREES = 60f
         private const val REVERSE_DIRECTION_MIN_DEGREES = 120f
         private const val OSM_SPEED_RETRY_MILLIS = 30_000L
+        private const val SPEED_RECOVERY_HYSTERESIS_KPH = 2f
         private const val DEER_PAIR_MAX_METRES = 20_000f
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var client: FusedLocationProviderClient
     private lateinit var audioManager: AudioManager
+    private val warningTone = ToneGenerator(AudioManager.STREAM_MUSIC, 90)
+    private val recoveryTone = ToneGenerator(AudioManager.STREAM_MUSIC, 70)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val dao by lazy { AppDatabase.get(this).dao() }
     private var driveId: Long? = null
@@ -129,7 +133,20 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private fun finishAfterAutomaticBackup() { client.removeLocationUpdates(callback); driveId = null; currentSpeedLimit = null; overSpeedAlertActive = false; stoppedSinceElapsedRealtime = null; previousMarkerDistances.clear(); markerBearingCache.clear(); TrackingState.activeDriveId.value = null; TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); stopService(Intent(this, CollectorOverlayService::class.java)); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     private fun defaultTolerance(speed: Int): Int = if (speed >= 100) 9 else 8
     private fun getSpeedTolerance(speed: Int): Int = getSharedPreferences(PREFS, MODE_PRIVATE).getInt("$PREF_SPEED_TOLERANCE_PREFIX$speed", defaultTolerance(speed))
-    private fun checkOverSpeedThreshold(actualSpeedKph: Float?) { val posted = TrackingState.currentPostedSpeed.value ?: run { overSpeedAlertActive = false; return }; val actual = actualSpeedKph ?: run { overSpeedAlertActive = false; return }; val threshold = posted + getSpeedTolerance(posted); val overThreshold = actual > threshold; if (overThreshold && !overSpeedAlertActive) { overSpeedAlertActive = true; speak("Speeding") } else if (!overThreshold) overSpeedAlertActive = false }
+    private fun checkOverSpeedThreshold(actualSpeedKph: Float?) {
+        val posted = TrackingState.currentPostedSpeed.value ?: run { overSpeedAlertActive = false; return }
+        val actual = actualSpeedKph ?: run { overSpeedAlertActive = false; return }
+        val threshold = posted + getSpeedTolerance(posted)
+        if (!overSpeedAlertActive && actual > threshold) {
+            overSpeedAlertActive = true
+            warningTone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 300)
+            speak("Speed warning. ${actual.toInt()} in a $posted zone")
+        } else if (overSpeedAlertActive && actual <= threshold - SPEED_RECOVERY_HYSTERESIS_KPH) {
+            overSpeedAlertActive = false
+            recoveryTone.startTone(ToneGenerator.TONE_PROP_ACK, 180)
+            speak("Speed reduced")
+        }
+    }
 
     private suspend fun announceNearbyRoadFacts(location: Location) {
         val facts = dao.getSpokenRoadFacts(); val cameraWarningMetres = getSharedPreferences(PREFS, MODE_PRIVATE).getInt(PREF_CAMERA_WARNING_METRES, 200).toFloat(); val deerFacts = facts.filter { it.kind == "deer_zone_enter" }

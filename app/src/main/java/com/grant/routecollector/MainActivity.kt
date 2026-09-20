@@ -169,10 +169,22 @@ private fun RouteCollectorScreen() {
                 Text(if (activeDriveId == null) "Start drive" else "Stop drive")
             }
 
-            // Weight is applied to a bounded Compose box; AndroidView is forced to match
-            // those bounds so osmdroid cannot measure itself over the collector controls.
-            Box(Modifier.fillMaxWidth().weight(1f)) {
-                RouteMap(points = points, markers = markers, modifier = Modifier.matchParentSize())
+            // Give osmdroid an explicit bounded viewport. AndroidView/MapView can otherwise
+            // report a larger intrinsic height and visually cover the Start/Stop control.
+            // 420dp keeps the map useful on the target phone while guaranteeing the driving
+            // controls remain in their own region above it.
+            HorizontalDivider()
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 180.dp, max = 420.dp)
+                    .weight(1f, fill = true)
+            ) {
+                RouteMap(
+                    points = points,
+                    markers = markers,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
         }
     }

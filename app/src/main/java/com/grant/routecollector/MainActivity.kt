@@ -152,7 +152,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (paired) "Deer zone captured" else "Deer zone marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f)) { Text("◆ 🦌") }
+                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f)) { Text("🦌 ◆") }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {
@@ -195,17 +195,10 @@ private fun RouteCollectorScreen() {
                         }, modifier = Modifier.weight(1f), colors = if ("senior" in activeZones) ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White) else ButtonDefaults.buttonColors()) {
                             Text(if ("senior" in activeZones) "Senior ■" else "Senior ▶")
                         }
-                        Button(
-                            onClick = { showSettings = !showSettings },
-                            modifier = Modifier.width(56.dp)
-                        ) { Text("⚙") }
-                    }
-                    Row(Modifier.fillMaxWidth()) {
                         Button(onClick = {
                             if (!pendingSpeedChosen) markerSpeed = postedSpeed?.takeIf { it in listOf(40,50,60,70,80,90,100,110) } ?: 60
-                            markerType = "Zone begins"
                             showSpeedMarker = !showSpeedMarker
-                        }, modifier = Modifier.fillMaxWidth()) { Text("Speed") }
+                        }, modifier = Modifier.weight(1f)) { Text("Speed") }
                     }
                     if (showSpeedMarker) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -227,7 +220,11 @@ private fun RouteCollectorScreen() {
                                 OutlinedButton(onClick = { typeMenu = true }, modifier = Modifier.fillMaxWidth()) { Text(markerType) }
                                 DropdownMenu(expanded = typeMenu, onDismissRequest = { typeMenu = false }) {
                                     listOf("Zone begins","Advance sign").forEach { type ->
-                                        DropdownMenuItem(text = { Text(type) }, onClick = { markerType = type; typeMenu = false })
+                                        DropdownMenuItem(
+                                            text = { Text(if (type == markerType) "✓  $type" else "   $type") },
+                                            onClick = { markerType = type; typeMenu = false },
+                                            colors = MenuDefaults.itemColors(textColor = if (type == markerType) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                                        )
                                     }
                                 }
                             }

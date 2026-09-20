@@ -62,10 +62,13 @@ private fun RouteCollectorScreen() {
     val prefs = remember { context.getSharedPreferences("routecollector_overlay", android.content.Context.MODE_PRIVATE) }
     var visualAlerts by remember { mutableStateOf(prefs.getBoolean("visual_alerts_enabled", true)) }
     var cameraWarning by remember { mutableIntStateOf(prefs.getInt("red_light_camera_warning_metres", 200)) }
+    var toleranceSpeed by remember { mutableIntStateOf(60) }
+    var toleranceValue by remember { mutableIntStateOf(prefs.getInt("speed_tolerance_60", 8)) }
     var markerSpeed by remember { mutableStateOf(60) }
     var pendingSpeedChosen by remember { mutableStateOf(false) }
     var markerType by remember { mutableStateOf("Zone begins") }
     val activeZones by TrackingState.activeZoneKinds.collectAsStateWithLifecycle()
+    val driverAlert by TrackingState.driverAlert.collectAsStateWithLifecycle()
     val travelBearing by TrackingState.latestBearingDegrees.collectAsStateWithLifecycle()
     val latestLat by TrackingState.latestLat.collectAsStateWithLifecycle()
     val latestLon by TrackingState.latestLon.collectAsStateWithLifecycle()
@@ -74,6 +77,17 @@ private fun RouteCollectorScreen() {
             action = DriveTrackingService.ACTION_SPEAK
             putExtra(DriveTrackingService.EXTRA_SPEAK_TEXT, text)
         })
+    }
+
+    LaunchedEffect(activeDriveId, markers) {
+        if (activeDriveId != null && markers.isNotEmpty()) {
+            val community = markers.lastOrNull { it.kind == "community_safety_zone_start" || it.kind == "community_safety_zone_end" }
+            val senior = markers.lastOrNull { it.kind == "senior_safety_zone_start" || it.kind == "senior_safety_zone_end" }
+            var restored = emptySet<String>()
+            if (community?.kind == "community_safety_zone_start") restored = restored + "community"
+            if (senior?.kind == "senior_safety_zone_start") restored = restored + "senior"
+            if (restored != TrackingState.activeZoneKinds.value) TrackingState.activeZoneKinds.value = restored
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -115,10 +129,10 @@ private fun RouteCollectorScreen() {
                 Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Collector", style = MaterialTheme.typography.titleMedium)
-                        TextButton(
-                            onClick = { showHistory = true },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                        ) { Text("History") }
+                        Row {
+                            TextButton(onClick = { showHistory = true }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("History") }
+                            TextButton(onClick = { showSettings = !showSettings }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("⚙") }
+                        }
                     }
                     Text(
                         "${if (collectedSpeed) "Collected" else "Posted"} ${postedSpeed?.let { "$it km/h" } ?: "--"}   Actual ${actualSpeed?.let { "${it.toInt()} km/h" } ?: "--"}",
@@ -272,6 +286,31 @@ private fun RouteCollectorScreen() {
                                 TextButton(onClick = { cameraWarning = (cameraWarning + 50).coerceAtMost(500); prefs.edit().putInt("red_light_camera_warning_metres", cameraWarning).apply() }) { Text("+50") }
                             }
                         }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Speed tolerance: $toleranceSpeed +$toleranceValue")
+                            Row {
+                                TextButton(onClick = {
+                                    toleranceSpeed = if (toleranceSpeed >= 110) 40 else toleranceSpeed + 10
+                                    toleranceValue = prefs.getInt("speed_tolerance_$toleranceSpeed", if (toleranceSpeed >= 100) 9 else 8)
+                                }) { Text("Speed") }
+                                TextButton(onClick = { toleranceValue = (toleranceValue - 1).coerceAtLeast(0); prefs.edit().putInt("speed_tolerance_$toleranceSpeed", toleranceValue).apply() }) { Text("−") }
+                                TextButton(onClick = { toleranceValue = (toleranceValue + 1).coerceAtMost(20); prefs.edit().putInt("speed_tolerance_$toleranceSpeed", toleranceValue).apply() }) { Text("+") }
+                            }
+                        }
+                    }
+                    if (driverAlert?.kind == "red_light_camera_remove_available" && driverAlert?.markerId != null) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Red-light camera here", modifier = Modifier.weight(1f))
+                            TextButton(onClick = { TrackingState.driverAlert.value = null }) { Text("Keep") }
+                            TextButton(onClick = {
+                                val markerId = driverAlert?.markerId
+                                if (markerId != null) scope.launch {
+                                    dao.deleteMarker(markerId)
+                                    TrackingState.driverAlert.value = null
+                                    speakPrompt("Camera removed")
+                                }
+                            }) { Text("Remove") }
+                        }
                     }
                     if (postedSpeed != null || activeZones.isNotEmpty()) {
                         Text("Active zones", style = MaterialTheme.typography.labelMedium)
@@ -377,6 +416,8 @@ private fun RouteCollectorScreen() {
                         currentLat = latestLat,
                         currentLon = latestLon,
                         travelBearing = travelBearing,
+                        activeZones = activeZones,
+                        postedSpeed = postedSpeed,
                         modifier = Modifier.fillMaxSize()
                     )
                 }

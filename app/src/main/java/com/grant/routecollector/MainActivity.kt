@@ -14,6 +14,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import android.media.AudioManager
+import android.media.ToneGenerator
+import com.grant.routecollector.map.IntersectionSnapper
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -53,6 +58,10 @@ private fun RouteCollectorScreen() {
     val actualSpeed by TrackingState.latestSpeedKph.collectAsStateWithLifecycle()
     val collectedSpeed by TrackingState.currentSpeedIsCollected.collectAsStateWithLifecycle()
     var showSpeedMarker by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    val prefs = remember { context.getSharedPreferences("routecollector_overlay", android.content.Context.MODE_PRIVATE) }
+    var visualAlerts by remember { mutableStateOf(prefs.getBoolean("visual_alerts_enabled", true)) }
+    var cameraWarning by remember { mutableIntStateOf(prefs.getInt("red_light_camera_warning_metres", 200)) }
     var markerSpeed by remember { mutableStateOf(60) }
     var markerType by remember { mutableStateOf("Zone begins") }
     val activeZones by TrackingState.activeZoneKinds.collectAsStateWithLifecycle()
@@ -115,8 +124,34 @@ private fun RouteCollectorScreen() {
                         style = MaterialTheme.typography.bodyLarge
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Button(onClick = { /* camera capture remains in collector service until capture actions are shared */ }, enabled = false, modifier = Modifier.weight(1f)) { Text("🚦📷") }
-                        Button(onClick = { /* deer capture remains in collector service until capture actions are shared */ }, enabled = false, modifier = Modifier.weight(1f)) { Text("◆ 🦌") }
+                        Button(onClick = {
+                            val driveId = activeDriveId
+                            if (driveId != null) scope.launch {
+                                dao.latestPoint(driveId)?.let { point ->
+                                    val snap = IntersectionSnapper.findNearestIntersection(point.latitude, point.longitude)
+                                    dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = snap?.latitude ?: point.latitude, longitude = snap?.longitude ?: point.longitude, kind = "red_light_camera", note = snap?.let { "Red light camera — ${it.intersectionName}; observed ${point.latitude},${point.longitude}" } ?: "Red light camera — intersection not confirmed; observed ${point.latitude},${point.longitude}"))
+                                    speakPrompt(if (snap != null) "Red light camera snapped to ${snap.intersectionName}" else "Red light camera marked")
+                                }
+                            }
+                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f)) { Text("🚦📷") }
+                        Button(onClick = {
+                            val driveId = activeDriveId
+                            if (driveId != null) scope.launch {
+                                dao.latestPoint(driveId)?.let { point ->
+                                    val bearing = travelBearing
+                                    val existing = dao.getDeerZoneMarkers()
+                                    dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = "deer_zone_enter", note = "Deer zone entering; bearing=${bearing?.roundToInt() ?: -1}"))
+                                    val paired = bearing != null && existing.any { other ->
+                                        val saved = Regex("bearing=(-?\\d+)").find(other.note)?.groupValues?.getOrNull(1)?.toFloatOrNull()?.takeIf { it >= 0f } ?: return@any false
+                                        val dist = FloatArray(1); android.location.Location.distanceBetween(point.latitude, point.longitude, other.latitude, other.longitude, dist)
+                                        val raw = abs((((bearing % 360f) + 360f) % 360f) - (((saved % 360f) + 360f) % 360f)); val diff = if (raw > 180f) 360f - raw else raw
+                                        dist[0] <= 20_000f && diff >= 120f
+                                    }
+                                    if (paired) ToneGenerator(AudioManager.STREAM_NOTIFICATION, 90).apply { startTone(ToneGenerator.TONE_PROP_BEEP2, 220); android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ release() }, 300) }
+                                    speakPrompt(if (paired) "Deer zone captured" else "Deer zone marked")
+                                }
+                            }
+                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f)) { Text("◆ 🦌") }
                         Button(onClick = {
                             markerSpeed = postedSpeed?.takeIf { it in listOf(40,50,60,70,80,90,100,110) } ?: 60
                             markerType = "Zone begins"
@@ -165,19 +200,32 @@ private fun RouteCollectorScreen() {
                             Text(if ("senior" in activeZones) "Senior ■" else "Senior ▶")
                         }
                         Button(
-                            onClick = {
-                                if (Settings.canDrawOverlays(context)) {
-                                    context.startService(Intent(context, CollectorOverlayService::class.java).apply {
-                                        action = CollectorOverlayService.ACTION_SHOW
-                                    })
-                                } else {
-                                    context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
-                                        data = android.net.Uri.parse("package:${context.packageName}")
-                                    })
-                                }
-                            },
+                            onClick = { showSettings = !showSettings },
                             modifier = Modifier.width(56.dp)
                         ) { Text("⚙") }
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = {
+                            val driveId = activeDriveId
+                            if (driveId != null) scope.launch {
+                                val deleted = dao.deleteLatestMarker(driveId)
+                                speakPrompt(if (deleted > 0) "Last marker removed" else "No marker to remove")
+                            }
+                        }, enabled = activeDriveId != null) { Text("↶ Undo") }
+                    }
+                    if (showSettings) {
+                        Text("Settings", style = MaterialTheme.typography.labelMedium)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Visual alerts")
+                            Switch(checked = visualAlerts, onCheckedChange = { visualAlerts = it; prefs.edit().putBoolean("visual_alerts_enabled", it).apply() })
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Camera warning: $cameraWarning m")
+                            Row {
+                                TextButton(onClick = { cameraWarning = (cameraWarning - 50).coerceAtLeast(100); prefs.edit().putInt("red_light_camera_warning_metres", cameraWarning).apply() }) { Text("−50") }
+                                TextButton(onClick = { cameraWarning = (cameraWarning + 50).coerceAtMost(500); prefs.edit().putInt("red_light_camera_warning_metres", cameraWarning).apply() }) { Text("+50") }
+                            }
+                        }
                     }
                     if (postedSpeed != null || activeZones.isNotEmpty()) {
                         Text("Active zones", style = MaterialTheme.typography.labelMedium)

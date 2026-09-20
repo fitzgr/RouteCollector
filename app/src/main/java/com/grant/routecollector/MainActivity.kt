@@ -179,6 +179,75 @@ private fun RouteCollectorScreen() {
                             modifier = Modifier.width(56.dp)
                         ) { Text("⚙") }
                     }
+                    if (postedSpeed != null || activeZones.isNotEmpty()) {
+                        Text("Active zones", style = MaterialTheme.typography.labelMedium)
+                        if (postedSpeed != null) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Speed: ${postedSpeed} km/h", modifier = Modifier.weight(1f))
+                                TextButton(onClick = {
+                                    context.startService(Intent(context, DriveTrackingService::class.java).apply {
+                                        action = DriveTrackingService.ACTION_CLEAR_SPEED_ZONE
+                                    })
+                                }) { Text("Clear") }
+                            }
+                        }
+                        if ("community" in activeZones) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Community safety", modifier = Modifier.weight(1f))
+                                TextButton(onClick = {
+                                    val driveId = activeDriveId
+                                    if (driveId != null) scope.launch {
+                                        dao.latestPoint(driveId)?.let { point ->
+                                            dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = "community_safety_zone_end", note = "Community safety zone end"))
+                                            TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"
+                                            speakPrompt("Community safety zone cleared")
+                                        }
+                                    }
+                                }) { Text("Clear") }
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        val zoneMarkers = dao.getCommunitySafetyZoneMarkers()
+                                        val latestStart = zoneMarkers.lastOrNull { it.kind == "community_safety_zone_start" }
+                                        if (latestStart != null) {
+                                            val latestEnd = zoneMarkers.filter { it.kind == "community_safety_zone_end" && it.timestamp >= latestStart.timestamp }.minByOrNull { it.timestamp }
+                                            dao.deleteMarker(latestStart.id)
+                                            latestEnd?.let { dao.deleteMarker(it.id) }
+                                        }
+                                        TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"
+                                        speakPrompt("Community safety zone deleted")
+                                    }
+                                }) { Text("Delete") }
+                            }
+                        }
+                        if ("senior" in activeZones) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Senior safety", modifier = Modifier.weight(1f))
+                                TextButton(onClick = {
+                                    val driveId = activeDriveId
+                                    if (driveId != null) scope.launch {
+                                        dao.latestPoint(driveId)?.let { point ->
+                                            dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = "senior_safety_zone_end", note = "Senior safety zone end"))
+                                            TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"
+                                            speakPrompt("Senior safety zone cleared")
+                                        }
+                                    }
+                                }) { Text("Clear") }
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        val zoneMarkers = dao.getSeniorSafetyZoneMarkers()
+                                        val latestStart = zoneMarkers.lastOrNull { it.kind == "senior_safety_zone_start" }
+                                        if (latestStart != null) {
+                                            val latestEnd = zoneMarkers.filter { it.kind == "senior_safety_zone_end" && it.timestamp >= latestStart.timestamp }.minByOrNull { it.timestamp }
+                                            dao.deleteMarker(latestStart.id)
+                                            latestEnd?.let { dao.deleteMarker(it.id) }
+                                        }
+                                        TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"
+                                        speakPrompt("Senior safety zone deleted")
+                                    }
+                                }) { Text("Delete") }
+                            }
+                        }
+                    }
                     if (showSpeedMarker) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             var speedMenu by remember { mutableStateOf(false) }

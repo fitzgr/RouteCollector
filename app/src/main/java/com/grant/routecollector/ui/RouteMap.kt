@@ -15,6 +15,8 @@ import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import kotlin.math.abs
+import kotlin.math.roundToInt
+import android.graphics.Point
 
 private const val AHEAD_DISTANCE_METRES = 5000f
 private const val AHEAD_BEARING_DEGREES = 70f
@@ -58,7 +60,14 @@ fun RouteMap(
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                 })
                 map.controller.setCenter(current)
-                travelBearing?.let { map.mapOrientation = -it }
+                travelBearing?.let { bearing ->
+                    map.mapOrientation = -bearing
+                    map.post {
+                        val projection = map.projection
+                        val screen = projection.toPixels(current, Point())
+                        map.controller.animateTo(projection.fromPixels(screen.x, (map.height * 0.72f).toInt()) as GeoPoint)
+                    }
+                }
             } else if (points.isNotEmpty()) {
                 map.controller.setCenter(GeoPoint(points.last().latitude, points.last().longitude))
             }
@@ -85,7 +94,10 @@ fun RouteMap(
                 }
             }
 
-            visibleMarkers.forEach { m ->
+            val rankedMarkers = visibleMarkers.sortedBy { marker ->
+                if (current == null) Float.MAX_VALUE else FloatArray(1).also { android.location.Location.distanceBetween(current.latitude, current.longitude, marker.latitude, marker.longitude, it) }[0]
+            }
+            rankedMarkers.forEachIndexed { index, m ->
                 map.overlays.add(Marker(map).apply {
                     position = GeoPoint(m.latitude, m.longitude)
                     title = when (m.kind) {
@@ -99,7 +111,10 @@ fun RouteMap(
                         "senior_safety_zone_end" -> "Senior safety zone end"
                         else -> m.kind.replace('_', ' ').replaceFirstChar { it.uppercase() }
                     }
-                    snippet = m.note
+                    snippet = if (index == 0 && current != null) {
+                        val d = FloatArray(1); android.location.Location.distanceBetween(current.latitude, current.longitude, m.latitude, m.longitude, d)
+                        "NEXT • ${d[0].roundToInt()} m • ${m.note}"
+                    } else m.note
                     if (m.kind == "camera" || m.kind == "red_light_camera") {
                         icon = ContextCompat.getDrawable(map.context, R.drawable.ic_red_light_camera)
                     }

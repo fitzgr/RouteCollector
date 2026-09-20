@@ -283,18 +283,10 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     private fun removeVerifiedCamera() { val markerId = activeVerificationMarkerId ?: return; activeVerificationMarkerId = null; verificationActions?.visibility = View.GONE; scope.launch { val deleted = dao.deleteMarker(markerId); launch(Dispatchers.Main) { acknowledge(if (deleted > 0) "Red light camera removed" else "Camera marker not found") } } }
     private fun acknowledge(text: String) {
         TrackingState.postDriverAlert(text)
-        if (!ttsReady) return
-        val wasMusicActive = audioManager.isMusicActive
-        if (wasMusicActive) {
-            audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PAUSE))
-            audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PAUSE))
-            musicPausedForPrompt = true
-        }
-        requestTransientAudioFocus()
-        mainHandler.postDelayed({
-            val params = android.os.Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f) }
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "overlay-" + System.currentTimeMillis())
-        }, 250L)
+        startService(Intent(this, DriveTrackingService::class.java).apply {
+            action = DriveTrackingService.ACTION_SPEAK
+            putExtra(DriveTrackingService.EXTRA_SPEAK_TEXT, text)
+        })
     }
     private fun resumeMusicAfterPrompt() {
         audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }; audioFocusRequest = null

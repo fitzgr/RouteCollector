@@ -72,6 +72,39 @@ private fun RouteCollectorScreen() {
     val travelBearing by TrackingState.latestBearingDegrees.collectAsStateWithLifecycle()
     val latestLat by TrackingState.latestLat.collectAsStateWithLifecycle()
     val latestLon by TrackingState.latestLon.collectAsStateWithLifecycle()
+    suspend fun saveBoundaryMarker(marker: MarkerEntity) {
+        if (marker.kind in setOf("speed","speed_advance","community_safety_zone_start","community_safety_zone_end","senior_safety_zone_start","senior_safety_zone_end")) {
+            val nearby = dao.markersOfKindInBox(marker.kind, marker.latitude - 0.002, marker.latitude + 0.002, marker.longitude - 0.002, marker.longitude + 0.002)
+            nearby.forEach { old ->
+                val d = FloatArray(1)
+                android.location.Location.distanceBetween(marker.latitude, marker.longitude, old.latitude, old.longitude, d)
+                if (d[0] <= 120f) dao.deleteMarker(old.id)
+            }
+        }
+        dao.insertMarker(marker)
+    }
+
+    suspend fun deleteNearestZonePair(type: String): Boolean {
+        val lat = TrackingState.latestLat.value ?: return false
+        val lon = TrackingState.latestLon.value ?: return false
+        val zoneMarkers = if (type == "community") dao.getCommunitySafetyZoneMarkers() else dao.getSeniorSafetyZoneMarkers()
+        if (zoneMarkers.isEmpty()) return false
+        fun distance(m: MarkerEntity): Float = FloatArray(1).also { android.location.Location.distanceBetween(lat, lon, m.latitude, m.longitude, it) }[0]
+        val nearest = zoneMarkers.minByOrNull { distance(it) } ?: return false
+        val startKind = if (type == "community") "community_safety_zone_start" else "senior_safety_zone_start"
+        val endKind = if (type == "community") "community_safety_zone_end" else "senior_safety_zone_end"
+        val counterpartKind = if (nearest.kind == startKind) endKind else startKind
+        val counterpart = zoneMarkers.filter { it.kind == counterpartKind }.minByOrNull { candidate ->
+            FloatArray(1).also { android.location.Location.distanceBetween(nearest.latitude, nearest.longitude, candidate.latitude, candidate.longitude, it) }[0]
+        }
+        dao.deleteMarker(nearest.id)
+        counterpart?.let {
+            val d = FloatArray(1); android.location.Location.distanceBetween(nearest.latitude, nearest.longitude, it.latitude, it.longitude, d)
+            if (d[0] <= 20_000f) dao.deleteMarker(it.id)
+        }
+        return true
+    }
+
     fun speakPrompt(text: String) {
         context.startService(Intent(context, DriveTrackingService::class.java).apply {
             action = DriveTrackingService.ACTION_SPEAK
@@ -174,7 +207,7 @@ private fun RouteCollectorScreen() {
                             if (driveId != null) scope.launch {
                                 dao.latestPoint(driveId)?.let { point ->
                                     val isActive = "community" in activeZones
-                                    dao.insertMarker(MarkerEntity(
+                                    saveBoundaryMarker(MarkerEntity(
                                         driveId = driveId, timestamp = System.currentTimeMillis(),
                                         latitude = point.latitude, longitude = point.longitude,
                                         kind = if (isActive) "community_safety_zone_end" else "community_safety_zone_start",
@@ -194,7 +227,7 @@ private fun RouteCollectorScreen() {
                             if (driveId != null) scope.launch {
                                 dao.latestPoint(driveId)?.let { point ->
                                     val isActive = "senior" in activeZones
-                                    dao.insertMarker(MarkerEntity(
+                                    saveBoundaryMarker(MarkerEntity(
                                         driveId = driveId, timestamp = System.currentTimeMillis(),
                                         latitude = point.latitude, longitude = point.longitude,
                                         kind = if (isActive) "senior_safety_zone_end" else "senior_safety_zone_start",
@@ -339,15 +372,9 @@ private fun RouteCollectorScreen() {
                                 }) { Text("Clear") }
                                 TextButton(onClick = {
                                     scope.launch {
-                                        val zoneMarkers = dao.getCommunitySafetyZoneMarkers()
-                                        val latestStart = zoneMarkers.lastOrNull { it.kind == "community_safety_zone_start" }
-                                        if (latestStart != null) {
-                                            val latestEnd = zoneMarkers.filter { it.kind == "community_safety_zone_end" && it.timestamp >= latestStart.timestamp }.minByOrNull { it.timestamp }
-                                            dao.deleteMarker(latestStart.id)
-                                            latestEnd?.let { dao.deleteMarker(it.id) }
-                                        }
+                                        val deleted = deleteNearestZonePair("community")
                                         TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"
-                                        speakPrompt("Community safety zone deleted")
+                                        speakPrompt(if (deleted) "Community safety zone deleted" else "No community safety zone found")
                                     }
                                 }) { Text("Delete") }
                             }
@@ -367,15 +394,9 @@ private fun RouteCollectorScreen() {
                                 }) { Text("Clear") }
                                 TextButton(onClick = {
                                     scope.launch {
-                                        val zoneMarkers = dao.getSeniorSafetyZoneMarkers()
-                                        val latestStart = zoneMarkers.lastOrNull { it.kind == "senior_safety_zone_start" }
-                                        if (latestStart != null) {
-                                            val latestEnd = zoneMarkers.filter { it.kind == "senior_safety_zone_end" && it.timestamp >= latestStart.timestamp }.minByOrNull { it.timestamp }
-                                            dao.deleteMarker(latestStart.id)
-                                            latestEnd?.let { dao.deleteMarker(it.id) }
-                                        }
+                                        val deleted = deleteNearestZonePair("senior")
                                         TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"
-                                        speakPrompt("Senior safety zone deleted")
+                                        speakPrompt(if (deleted) "Senior safety zone deleted" else "No senior safety zone found")
                                     }
                                 }) { Text("Delete") }
                             }

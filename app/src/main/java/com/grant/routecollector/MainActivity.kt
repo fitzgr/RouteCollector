@@ -55,6 +55,12 @@ private fun RouteCollectorScreen() {
     var markerSpeed by remember { mutableStateOf(60) }
     var markerType by remember { mutableStateOf("Zone begins") }
     val activeZones by TrackingState.activeZoneKinds.collectAsStateWithLifecycle()
+    fun speakPrompt(text: String) {
+        context.startService(Intent(context, DriveTrackingService::class.java).apply {
+            action = DriveTrackingService.ACTION_SPEAK
+            putExtra(DriveTrackingService.EXTRA_SPEAK_TEXT, text)
+        })
+    }
 
     LaunchedEffect(Unit) {
         val wanted = buildList {
@@ -128,6 +134,7 @@ private fun RouteCollectorScreen() {
                                     TrackingState.activeZoneKinds.value =
                                         if (isActive) TrackingState.activeZoneKinds.value - "community"
                                         else TrackingState.activeZoneKinds.value + "community"
+                                    speakPrompt(if (isActive) "Community safety end marked" else "Community safety start marked")
                                 }
                             }
                         }, modifier = Modifier.weight(1f)) {
@@ -147,6 +154,7 @@ private fun RouteCollectorScreen() {
                                     TrackingState.activeZoneKinds.value =
                                         if (isActive) TrackingState.activeZoneKinds.value - "senior"
                                         else TrackingState.activeZoneKinds.value + "senior"
+                                    speakPrompt(if (isActive) "Senior safety end marked" else "Senior safety start marked")
                                 }
                             }
                         }, modifier = Modifier.weight(1f)) {
@@ -203,6 +211,7 @@ private fun RouteCollectorScreen() {
                                             TrackingState.currentSpeedIsCollected.value = true
                                             TrackingState.currentPostedSpeed.value = markerSpeed
                                         }
+                                        speakPrompt(if (advance) "$markerSpeed kilometre advance sign marked" else "$markerSpeed kilometre zone start marked")
                                     }
                                 }
                             }) { Text("Set") }

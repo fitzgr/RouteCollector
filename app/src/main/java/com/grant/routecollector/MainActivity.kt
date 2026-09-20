@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -53,6 +54,7 @@ private fun RouteCollectorScreen() {
     var showSpeedMarker by remember { mutableStateOf(false) }
     var markerSpeed by remember { mutableStateOf(60) }
     var markerType by remember { mutableStateOf("Zone begins") }
+    val activeZones by TrackingState.activeZoneKinds.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
         val wanted = buildList {
@@ -110,6 +112,60 @@ private fun RouteCollectorScreen() {
                             markerType = "Zone begins"
                             showSpeedMarker = !showSpeedMarker
                         }, modifier = Modifier.weight(1f)) { Text("Speed") }
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(onClick = {
+                            val driveId = activeDriveId
+                            if (driveId != null) scope.launch {
+                                dao.latestPoint(driveId)?.let { point ->
+                                    val isActive = "community" in activeZones
+                                    dao.insertMarker(MarkerEntity(
+                                        driveId = driveId, timestamp = System.currentTimeMillis(),
+                                        latitude = point.latitude, longitude = point.longitude,
+                                        kind = if (isActive) "community_safety_zone_end" else "community_safety_zone_start",
+                                        note = if (isActive) "Community safety zone end" else "Community safety zone start"
+                                    ))
+                                    TrackingState.activeZoneKinds.value =
+                                        if (isActive) TrackingState.activeZoneKinds.value - "community"
+                                        else TrackingState.activeZoneKinds.value + "community"
+                                }
+                            }
+                        }, modifier = Modifier.weight(1f)) {
+                            Text(if ("community" in activeZones) "Community ■" else "Community ▶")
+                        }
+                        Button(onClick = {
+                            val driveId = activeDriveId
+                            if (driveId != null) scope.launch {
+                                dao.latestPoint(driveId)?.let { point ->
+                                    val isActive = "senior" in activeZones
+                                    dao.insertMarker(MarkerEntity(
+                                        driveId = driveId, timestamp = System.currentTimeMillis(),
+                                        latitude = point.latitude, longitude = point.longitude,
+                                        kind = if (isActive) "senior_safety_zone_end" else "senior_safety_zone_start",
+                                        note = if (isActive) "Senior safety zone end" else "Senior safety zone start"
+                                    ))
+                                    TrackingState.activeZoneKinds.value =
+                                        if (isActive) TrackingState.activeZoneKinds.value - "senior"
+                                        else TrackingState.activeZoneKinds.value + "senior"
+                                }
+                            }
+                        }, modifier = Modifier.weight(1f)) {
+                            Text(if ("senior" in activeZones) "Senior ■" else "Senior ▶")
+                        }
+                        Button(
+                            onClick = {
+                                if (Settings.canDrawOverlays(context)) {
+                                    context.startService(Intent(context, CollectorOverlayService::class.java).apply {
+                                        action = CollectorOverlayService.ACTION_SHOW
+                                    })
+                                } else {
+                                    context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                                        data = android.net.Uri.parse("package:${context.packageName}")
+                                    })
+                                }
+                            },
+                            modifier = Modifier.width(56.dp)
+                        ) { Text("⚙") }
                     }
                     if (showSpeedMarker) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

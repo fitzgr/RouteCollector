@@ -79,10 +79,14 @@ private fun RouteCollectorScreen() {
     }
 
     Scaffold(topBar = { TopAppBar(title = { Text("Route Collector") }) }) { padding ->
-        Column(
-            Modifier.padding(padding).padding(horizontal = 10.dp, vertical = 6.dp).fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+        BoxWithConstraints(
+            Modifier.padding(padding).padding(horizontal = 10.dp, vertical = 6.dp).fillMaxSize()
         ) {
+            val mapHeight = maxHeight / 2
+            Column(
+                Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
             // Collector owns a compact fixed-height control area. The map is constrained
             // to the remaining space and can never cover or push these controls off-screen.
             Card(Modifier.fillMaxWidth()) {
@@ -169,22 +173,19 @@ private fun RouteCollectorScreen() {
                 Text(if (activeDriveId == null) "Start drive" else "Stop drive")
             }
 
-            // Give osmdroid an explicit bounded viewport. AndroidView/MapView can otherwise
-            // report a larger intrinsic height and visually cover the Start/Stop control.
-            // 420dp keeps the map useful on the target phone while guaranteeing the driving
-            // controls remain in their own region above it.
-            HorizontalDivider()
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 180.dp, max = 420.dp)
-                    .weight(1f, fill = true)
-            ) {
-                RouteMap(
-                    points = points,
-                    markers = markers,
-                    modifier = Modifier.fillMaxSize()
-                )
+                Spacer(Modifier.weight(1f))
+                HorizontalDivider()
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(mapHeight)
+                ) {
+                    RouteMap(
+                        points = points,
+                        markers = markers,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
     }

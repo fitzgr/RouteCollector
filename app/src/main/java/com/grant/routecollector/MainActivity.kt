@@ -63,6 +63,7 @@ private fun RouteCollectorScreen() {
     var visualAlerts by remember { mutableStateOf(prefs.getBoolean("visual_alerts_enabled", true)) }
     var cameraWarning by remember { mutableIntStateOf(prefs.getInt("red_light_camera_warning_metres", 200)) }
     var markerSpeed by remember { mutableStateOf(60) }
+    var pendingSpeedChosen by remember { mutableStateOf(false) }
     var markerType by remember { mutableStateOf("Zone begins") }
     val activeZones by TrackingState.activeZoneKinds.collectAsStateWithLifecycle()
     val travelBearing by TrackingState.latestBearingDegrees.collectAsStateWithLifecycle()
@@ -201,7 +202,7 @@ private fun RouteCollectorScreen() {
                     }
                     Row(Modifier.fillMaxWidth()) {
                         Button(onClick = {
-                            markerSpeed = postedSpeed?.takeIf { it in listOf(40,50,60,70,80,90,100,110) } ?: 60
+                            if (!pendingSpeedChosen) markerSpeed = postedSpeed?.takeIf { it in listOf(40,50,60,70,80,90,100,110) } ?: 60
                             markerType = "Zone begins"
                             showSpeedMarker = !showSpeedMarker
                         }, modifier = Modifier.fillMaxWidth()) { Text("Speed") }
@@ -214,7 +215,11 @@ private fun RouteCollectorScreen() {
                                 OutlinedButton(onClick = { speedMenu = true }, modifier = Modifier.fillMaxWidth()) { Text("$markerSpeed km/h") }
                                 DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
                                     listOf(40,50,60,70,80,90,100,110).forEach { speed ->
-                                        DropdownMenuItem(text = { Text("$speed km/h") }, onClick = { markerSpeed = speed; speedMenu = false })
+                                        DropdownMenuItem(
+                                            text = { Text(if (speed == markerSpeed) "✓  $speed km/h" else "   $speed km/h") },
+                                            onClick = { markerSpeed = speed; pendingSpeedChosen = true; speedMenu = false },
+                                            colors = MenuDefaults.itemColors(textColor = if (speed == markerSpeed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                                        )
                                     }
                                 }
                             }

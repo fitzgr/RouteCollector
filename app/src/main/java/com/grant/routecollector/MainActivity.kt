@@ -12,8 +12,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -81,15 +79,25 @@ private fun RouteCollectorScreen() {
     }
 
     Scaffold(topBar = { TopAppBar(title = { Text("Route Collector") }) }) { padding ->
-        Column(Modifier.padding(padding).padding(10.dp).fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            // Fixed collector controls: these are part of the app layout, not a floating overlay.
+        Column(
+            Modifier.padding(padding).padding(horizontal = 10.dp, vertical = 6.dp).fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            // Collector owns a compact fixed-height control area. The map is constrained
+            // to the remaining space and can never cover or push these controls off-screen.
             Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Collector", style = MaterialTheme.typography.titleMedium)
-                        TextButton(onClick = { showHistory = true }) { Text("History") }
+                        TextButton(
+                            onClick = { showHistory = true },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                        ) { Text("History") }
                     }
-                    Text("${if (collectedSpeed) "Collected" else "Posted"} ${postedSpeed?.let { "$it km/h" } ?: "--"}   Actual ${actualSpeed?.let { "${it.toInt()} km/h" } ?: "--"}")
+                    Text(
+                        "${if (collectedSpeed) "Collected" else "Posted"} ${postedSpeed?.let { "$it km/h" } ?: "--"}   Actual ${actualSpeed?.let { "${it.toInt()} km/h" } ?: "--"}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = { /* camera capture remains in collector service until capture actions are shared */ }, enabled = false, modifier = Modifier.weight(1f)) { Text("🚦📷") }
                         Button(onClick = { /* deer capture remains in collector service until capture actions are shared */ }, enabled = false, modifier = Modifier.weight(1f)) { Text("◆ 🦌") }
@@ -157,12 +165,15 @@ private fun RouteCollectorScreen() {
                     context.stopService(Intent(context, CollectorOverlayService::class.java))
                     context.stopService(Intent(context, RouteMarkerMapOverlayService::class.java))
                 }
-            }, modifier = Modifier.fillMaxWidth()) {
+            }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                 Text(if (activeDriveId == null) "Start drive" else "Stop drive")
             }
 
-            // Map owns only the remaining lower portion of the screen.
-            RouteMap(points = points, markers = markers, modifier = Modifier.fillMaxWidth().weight(1f))
+            // Weight is applied to a bounded Compose box; AndroidView is forced to match
+            // those bounds so osmdroid cannot measure itself over the collector controls.
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                RouteMap(points = points, markers = markers, modifier = Modifier.matchParentSize())
+            }
         }
     }
 }

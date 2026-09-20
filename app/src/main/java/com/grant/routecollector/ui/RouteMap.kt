@@ -17,6 +17,9 @@ import org.osmdroid.views.overlay.Polyline
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import android.graphics.Point
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.LayerDrawable
+import androidx.core.graphics.drawable.DrawableCompat
 
 private const val AHEAD_DISTANCE_METRES = 5000f
 private const val AHEAD_BEARING_DEGREES = 70f
@@ -39,6 +42,7 @@ fun RouteMap(
             }
         },
         update = { map ->
+            val previousCenter = map.mapCenter
             map.overlays.clear()
 
             if (points.isNotEmpty()) {
@@ -59,13 +63,14 @@ fun RouteMap(
                     }
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                 })
-                map.controller.setCenter(current)
-                travelBearing?.let { bearing ->
-                    map.mapOrientation = -bearing
-                    map.post {
+                travelBearing?.let { bearing -> map.mapOrientation = -bearing }
+                map.post {
+                    if (map.width > 0 && map.height > 0) {
                         val projection = map.projection
                         val screen = projection.toPixels(current, Point())
-                        map.controller.animateTo(projection.fromPixels(screen.x, (map.height * 0.72f).toInt()) as GeoPoint)
+                        val targetY = (map.height * 0.72f).toInt()
+                        val desiredCenter = projection.fromPixels(screen.x, screen.y - targetY + map.height / 2)
+                        map.controller.setCenter(desiredCenter)
                     }
                 }
             } else if (points.isNotEmpty()) {
@@ -116,7 +121,17 @@ fun RouteMap(
                         "NEXT • ${d[0].roundToInt()} m • ${m.note}"
                     } else m.note
                     if (m.kind == "camera" || m.kind == "red_light_camera") {
-                        icon = ContextCompat.getDrawable(map.context, R.drawable.ic_red_light_camera)
+                        icon = ContextCompat.getDrawable(map.context, R.drawable.ic_red_light_camera)?.apply {
+                            setBounds(0, 0, (56 * map.context.resources.displayMetrics.density).toInt(), (56 * map.context.resources.displayMetrics.density).toInt())
+                        }
+                    } else if (m.kind == "deer_zone_enter") {
+                        icon = emojiMarker("🦌", map.context.resources.displayMetrics.density)
+                    } else if (m.kind in setOf("community_safety_zone_start","community_safety_zone_end","school_zone","school_zone_start","school_zone_end")) {
+                        icon = zoneMarker(Color.rgb(46,125,50), map.context.resources.displayMetrics.density)
+                    } else if (m.kind in setOf("senior_safety_zone_start","senior_safety_zone_end")) {
+                        icon = zoneMarker(Color.rgb(106,76,147), map.context.resources.displayMetrics.density)
+                    } else if (m.kind == "speed" || m.kind == "speed_advance") {
+                        icon = zoneMarker(Color.rgb(245,124,0), map.context.resources.displayMetrics.density)
                     }
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                 })
@@ -130,4 +145,31 @@ private fun bearingDifference(a: Float, b: Float): Float {
     fun normalize(value: Float) = ((value % 360f) + 360f) % 360f
     val raw = abs(normalize(a) - normalize(b))
     return if (raw > 180f) 360f - raw else raw
+}
+
+
+private fun zoneMarker(color: Int, density: Float): Drawable = GradientDrawable().apply {
+    shape = GradientDrawable.OVAL
+    setColor(color)
+    setStroke((3 * density).toInt(), Color.WHITE)
+    setSize((30 * density).toInt(), (30 * density).toInt())
+}
+
+private fun emojiMarker(emoji: String, density: Float): Drawable {
+    val size = (44 * density).toInt()
+    return object : android.graphics.drawable.Drawable() {
+        private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = 34 * density
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+        override fun draw(canvas: android.graphics.Canvas) {
+            val fm = paint.fontMetrics
+            canvas.drawText(emoji, bounds.exactCenterX(), bounds.exactCenterY() - (fm.ascent + fm.descent) / 2, paint)
+        }
+        override fun setAlpha(alpha: Int) { paint.alpha = alpha }
+        override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) { paint.colorFilter = colorFilter }
+        @Deprecated("Deprecated in Java") override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
+        override fun getIntrinsicWidth() = size
+        override fun getIntrinsicHeight() = size
+    }.apply { setBounds(0, 0, size, size) }
 }

@@ -132,8 +132,8 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         val speedMarker = Button(this).apply { text = "Speed" }
         val deer = LinearLayout(this).apply {
             gravity = Gravity.CENTER
-            minWidth = 62
-            minHeight = 62
+            minimumWidth = 62
+            minimumHeight = 62
             setPadding(8, 8, 8, 8)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE

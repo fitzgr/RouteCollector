@@ -152,11 +152,6 @@ private fun RouteCollectorScreen() {
                                 }
                             }
                         }, enabled = activeDriveId != null, modifier = Modifier.weight(1f)) { Text("◆ 🦌") }
-                        Button(onClick = {
-                            markerSpeed = postedSpeed?.takeIf { it in listOf(40,50,60,70,80,90,100,110) } ?: 60
-                            markerType = "Zone begins"
-                            showSpeedMarker = !showSpeedMarker
-                        }, modifier = Modifier.weight(1f)) { Text("Speed") }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {
@@ -203,6 +198,55 @@ private fun RouteCollectorScreen() {
                             onClick = { showSettings = !showSettings },
                             modifier = Modifier.width(56.dp)
                         ) { Text("⚙") }
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        Button(onClick = {
+                            markerSpeed = postedSpeed?.takeIf { it in listOf(40,50,60,70,80,90,100,110) } ?: 60
+                            markerType = "Zone begins"
+                            showSpeedMarker = !showSpeedMarker
+                        }, modifier = Modifier.fillMaxWidth()) { Text("Speed") }
+                    }
+                    if (showSpeedMarker) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            var speedMenu by remember { mutableStateOf(false) }
+                            var typeMenu by remember { mutableStateOf(false) }
+                            Box(Modifier.weight(1f)) {
+                                OutlinedButton(onClick = { speedMenu = true }, modifier = Modifier.fillMaxWidth()) { Text("$markerSpeed km/h") }
+                                DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
+                                    listOf(40,50,60,70,80,90,100,110).forEach { speed ->
+                                        DropdownMenuItem(text = { Text("$speed km/h") }, onClick = { markerSpeed = speed; speedMenu = false })
+                                    }
+                                }
+                            }
+                            Box(Modifier.weight(1f)) {
+                                OutlinedButton(onClick = { typeMenu = true }, modifier = Modifier.fillMaxWidth()) { Text(markerType) }
+                                DropdownMenu(expanded = typeMenu, onDismissRequest = { typeMenu = false }) {
+                                    listOf("Zone begins","Advance sign").forEach { type ->
+                                        DropdownMenuItem(text = { Text(type) }, onClick = { markerType = type; typeMenu = false })
+                                    }
+                                }
+                            }
+                            Button(onClick = {
+                                val driveId = activeDriveId
+                                if (driveId != null) scope.launch {
+                                    val point = dao.latestPoint(driveId)
+                                    if (point != null) {
+                                        val advance = markerType == "Advance sign"
+                                        dao.insertMarker(MarkerEntity(
+                                            driveId = driveId, timestamp = System.currentTimeMillis(),
+                                            latitude = point.latitude, longitude = point.longitude,
+                                            kind = if (advance) "speed_advance" else "speed",
+                                            note = if (advance) "Speed limit $markerSpeed advance sign" else "Speed limit $markerSpeed"
+                                        ))
+                                        if (!advance) {
+                                            TrackingState.currentSpeedIsCollected.value = true
+                                            TrackingState.currentPostedSpeed.value = markerSpeed
+                                        }
+                                        speakPrompt(if (advance) "$markerSpeed kilometre advance sign marked" else "$markerSpeed kilometre zone start marked")
+                                    }
+                                }
+                            }) { Text("Set") }
+                        }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = {
@@ -296,48 +340,7 @@ private fun RouteCollectorScreen() {
                             }
                         }
                     }
-                    if (showSpeedMarker) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            var speedMenu by remember { mutableStateOf(false) }
-                            var typeMenu by remember { mutableStateOf(false) }
-                            Box(Modifier.weight(1f)) {
-                                OutlinedButton(onClick = { speedMenu = true }, modifier = Modifier.fillMaxWidth()) { Text("$markerSpeed km/h") }
-                                DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
-                                    listOf(40,50,60,70,80,90,100,110).forEach { speed ->
-                                        DropdownMenuItem(text = { Text("$speed km/h") }, onClick = { markerSpeed = speed; speedMenu = false })
-                                    }
-                                }
-                            }
-                            Box(Modifier.weight(1f)) {
-                                OutlinedButton(onClick = { typeMenu = true }, modifier = Modifier.fillMaxWidth()) { Text(markerType) }
-                                DropdownMenu(expanded = typeMenu, onDismissRequest = { typeMenu = false }) {
-                                    listOf("Zone begins","Advance sign").forEach { type ->
-                                        DropdownMenuItem(text = { Text(type) }, onClick = { markerType = type; typeMenu = false })
-                                    }
-                                }
-                            }
-                            Button(onClick = {
-                                val driveId = activeDriveId
-                                if (driveId != null) scope.launch {
-                                    val point = dao.latestPoint(driveId)
-                                    if (point != null) {
-                                        val advance = markerType == "Advance sign"
-                                        dao.insertMarker(MarkerEntity(
-                                            driveId = driveId, timestamp = System.currentTimeMillis(),
-                                            latitude = point.latitude, longitude = point.longitude,
-                                            kind = if (advance) "speed_advance" else "speed",
-                                            note = if (advance) "Speed limit $markerSpeed advance sign" else "Speed limit $markerSpeed"
-                                        ))
-                                        if (!advance) {
-                                            TrackingState.currentSpeedIsCollected.value = true
-                                            TrackingState.currentPostedSpeed.value = markerSpeed
-                                        }
-                                        speakPrompt(if (advance) "$markerSpeed kilometre advance sign marked" else "$markerSpeed kilometre zone start marked")
-                                    }
-                                }
-                            }) { Text("Set") }
-                        }
-                    }
+
                 }
             }
 

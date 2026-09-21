@@ -132,19 +132,21 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         if (stoppedSince == null) { stoppedSinceElapsedRealtime = now; return }; if (autoBackupDoneForCurrentStop || now - stoppedSince < AUTO_BACKUP_STOPPED_MILLIS) return; autoBackupDoneForCurrentStop = true
         scope.launch { try { val id = driveId ?: return@launch; dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) }; val fileName = RouteDataExporter.exportToDownloads(this@DriveTrackingService, dao, automatic = true); TrackingState.postDriverAlert("Route backed up and drive ended after 10 minutes stopped: $fileName", kind = "auto_backup"); finishAfterAutomaticBackup() } catch (_: Exception) { autoBackupDoneForCurrentStop = false; TrackingState.postDriverAlert("Automatic route data backup failed", kind = "auto_backup_error") } }
     }
-    private fun finishAfterAutomaticBackup() { client.removeLocationUpdates(callback); driveId = null; currentSpeedLimit = null; overSpeedAlertActive = false; stoppedSinceElapsedRealtime = null; previousMarkerDistances.clear(); markerBearingCache.clear(); activeZoneEntryBearings.clear(); TrackingState.activeDriveId.value = null; TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); stopService(Intent(this, CollectorOverlayService::class.java)); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun finishAfterAutomaticBackup() { client.removeLocationUpdates(callback); driveId = null; currentSpeedLimit = null; overSpeedAlertActive = false; stoppedSinceElapsedRealtime = null; previousMarkerDistances.clear(); markerBearingCache.clear(); activeZoneEntryBearings.clear(); TrackingState.activeDriveId.value = null; TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); TrackingState.activeRoadAlerts.value = emptySet(); TrackingState.overSpeedActive.value = false; stopService(Intent(this, CollectorOverlayService::class.java)); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     private fun defaultTolerance(speed: Int): Int = if (speed >= 100) 9 else 8
     private fun getSpeedTolerance(speed: Int): Int = getSharedPreferences(PREFS, MODE_PRIVATE).getInt("$PREF_SPEED_TOLERANCE_PREFIX$speed", defaultTolerance(speed))
     private fun checkOverSpeedThreshold(actualSpeedKph: Float?) {
-        val posted = TrackingState.currentPostedSpeed.value ?: run { overSpeedAlertActive = false; return }
-        val actual = actualSpeedKph ?: run { overSpeedAlertActive = false; return }
+        val posted = TrackingState.currentPostedSpeed.value ?: run { overSpeedAlertActive = false; TrackingState.overSpeedActive.value = false; return }
+        val actual = actualSpeedKph ?: run { overSpeedAlertActive = false; TrackingState.overSpeedActive.value = false; return }
         val threshold = posted + getSpeedTolerance(posted)
         if (!overSpeedAlertActive && actual > threshold) {
             overSpeedAlertActive = true
+            TrackingState.overSpeedActive.value = true
             warningTone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 300)
             speak("Speed warning. ${actual.toInt()} in a $posted zone")
         } else if (overSpeedAlertActive && actual <= threshold - SPEED_RECOVERY_HYSTERESIS_KPH) {
             overSpeedAlertActive = false
+            TrackingState.overSpeedActive.value = false
             recoveryTone.startTone(ToneGenerator.TONE_PROP_ACK, 180)
             speak("Good")
         }
@@ -177,7 +179,10 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         if (!paired) return
         val travel = currentTravelBearing ?: return; val difference = bearingDifference(savedBearing, travel)
         val phrase = when { difference <= SAME_DIRECTION_TOLERANCE_DEGREES -> "Deer crossing area"; difference >= REVERSE_DIRECTION_MIN_DEGREES -> "Leaving deer area"; else -> return }
-        announcedMarkerIds += fact.id; speak(phrase)
+        announcedMarkerIds += fact.id
+        if (difference <= SAME_DIRECTION_TOLERANCE_DEGREES) TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value + "deer"
+        else TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
+        speak(phrase)
     }
 
     private suspend fun markerBearing(fact: MarkerEntity): Float? { if (markerBearingCache.containsKey(fact.id)) return markerBearingCache[fact.id]; val points = dao.pointsBeforeMarker(fact.driveId, fact.timestamp); val bearing = if (points.size >= 2) { val newer = points[0]; val older = points[1]; val result = FloatArray(1); Location.distanceBetween(older.latitude, older.longitude, newer.latitude, newer.longitude, result); if (result[0] >= 3f) { val from = Location("marker-history").apply { latitude = older.latitude; longitude = older.longitude }; val to = Location("marker-history").apply { latitude = newer.latitude; longitude = newer.longitude }; normalizeBearing(from.bearingTo(to)) } else null } else null; markerBearingCache[fact.id] = bearing; return bearing }
@@ -204,7 +209,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         val phrase = when (fact.kind) { "community_safety_zone_start", "school_zone", "school_zone_start" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "community"; currentTravelBearing?.let { activeZoneEntryBearings["community"] = it }; "Entering community zone" }; "community_safety_zone_end", "school_zone_end" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"; activeZoneEntryBearings.remove("community"); "Leaving community zone" }; "senior_safety_zone_start" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "senior"; currentTravelBearing?.let { activeZoneEntryBearings["senior"] = it }; "Entering senior zone" }; "senior_safety_zone_end" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"; activeZoneEntryBearings.remove("senior"); "Leaving senior zone" }; else -> null } ?: return
         announcedMarkerIds += fact.id; speak(phrase)
     }
-    private fun handleRedLightCamera(fact: MarkerEntity, distance: Float, approaching: Boolean, warningMetres: Float) { if (approaching && distance <= warningMetres && distance > ACTIVE_ZONE_RADIUS_METRES && fact.id !in warnedCameraMarkerIds) { warnedCameraMarkerIds += fact.id; speak("Red-light-camera") }; if (approaching && distance <= ACTIVE_ZONE_RADIUS_METRES && fact.id !in verifiedCameraMarkerIds) { verifiedCameraMarkerIds += fact.id; TrackingState.postDriverAlert(text = "Red light camera", kind = "red_light_camera_remove_available", markerId = fact.id) } }
+    private fun handleRedLightCamera(fact: MarkerEntity, distance: Float, approaching: Boolean, warningMetres: Float) { if (distance <= warningMetres) TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value + "camera" else if (fact.id in verifiedCameraMarkerIds || fact.id in warnedCameraMarkerIds) TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "camera"; if (approaching && distance <= warningMetres && distance > ACTIVE_ZONE_RADIUS_METRES && fact.id !in warnedCameraMarkerIds) { warnedCameraMarkerIds += fact.id; speak("Red-light-camera") }; if (approaching && distance <= ACTIVE_ZONE_RADIUS_METRES && fact.id !in verifiedCameraMarkerIds) { verifiedCameraMarkerIds += fact.id; TrackingState.postDriverAlert(text = "Red light camera", kind = "red_light_camera_remove_available", markerId = fact.id) } }
     private fun parseSpeed(note: String): Int? = Regex("\\b(20|30|40|50|60|70|80|90|100|110|120)\\b").find(note)?.groupValues?.getOrNull(1)?.toIntOrNull()
     private fun speak(text: String) {
         TrackingState.postDriverAlert(text)
@@ -235,7 +240,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PLAY))
         }
     }
-    private fun stopTracking() { client.removeLocationUpdates(callback); val id = driveId; if (id != null) scope.launch { dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) } }; driveId = null; currentSpeedLimit = null; overSpeedAlertActive = false; stoppedSinceElapsedRealtime = null; autoBackupDoneForCurrentStop = false; previousMarkerDistances.clear(); markerBearingCache.clear(); TrackingState.activeDriveId.value = null; TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopTracking() { client.removeLocationUpdates(callback); val id = driveId; if (id != null) scope.launch { dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) } }; driveId = null; currentSpeedLimit = null; overSpeedAlertActive = false; stoppedSinceElapsedRealtime = null; autoBackupDoneForCurrentStop = false; previousMarkerDistances.clear(); markerBearingCache.clear(); TrackingState.activeDriveId.value = null; TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); TrackingState.activeRoadAlerts.value = emptySet(); TrackingState.overSpeedActive.value = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     private fun createChannel() { getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL_ID, "Drive tracking", NotificationManager.IMPORTANCE_LOW)) }
     private fun buildNotification() = NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(android.R.drawable.ic_menu_mylocation).setContentTitle("Route Collector is recording").setContentText("GPS recording and route alerts are active").setOngoing(true).setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
     override fun onDestroy() { client.removeLocationUpdates(callback); mainHandler.removeCallbacksAndMessages(null); tts?.stop(); tts?.shutdown(); scope.cancel(); super.onDestroy() }

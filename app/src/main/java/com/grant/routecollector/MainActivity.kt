@@ -233,7 +233,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Community safety end marked" else "Community safety start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(1f), colors = if ("community" in activeZones) ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White) else ButtonDefaults.buttonColors()) {
+                        }, modifier = Modifier.weight(1.45f), colors = if ("community" in activeZones) ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White) else ButtonDefaults.buttonColors()) {
                             Text(if ("community" in activeZones) "Community ■" else "Community ▶")
                         }
                         Button(onClick = {
@@ -253,13 +253,13 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Senior safety end marked" else "Senior safety start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(1f), colors = if ("senior" in activeZones) ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White) else ButtonDefaults.buttonColors()) {
+                        }, modifier = Modifier.weight(1.05f), colors = if ("senior" in activeZones) ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White) else ButtonDefaults.buttonColors()) {
                             Text(if ("senior" in activeZones) "Senior ■" else "Senior ▶")
                         }
                         Button(onClick = {
                             if (!pendingSpeedChosen) markerSpeed = postedSpeed?.takeIf { it in listOf(40,50,60,70,80,90,100,110) } ?: 60
                             showSpeedMarker = !showSpeedMarker
-                        }, modifier = Modifier.weight(1f)) { Text("Speed") }
+                        }, modifier = Modifier.weight(0.75f)) { Text("Speed") }
                     }
                     if (showSpeedMarker) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

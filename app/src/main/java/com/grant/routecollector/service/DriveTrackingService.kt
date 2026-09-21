@@ -144,7 +144,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         } else if (overSpeedAlertActive && actual <= threshold - SPEED_RECOVERY_HYSTERESIS_KPH) {
             overSpeedAlertActive = false
             recoveryTone.startTone(ToneGenerator.TONE_PROP_ACK, 180)
-            speak("Speed reduced")
+            speak("Good")
         }
     }
 

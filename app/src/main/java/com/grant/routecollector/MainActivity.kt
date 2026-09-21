@@ -73,7 +73,7 @@ private fun RouteCollectorScreen() {
     val latestLat by TrackingState.latestLat.collectAsStateWithLifecycle()
     val latestLon by TrackingState.latestLon.collectAsStateWithLifecycle()
     suspend fun saveBoundaryMarker(marker: MarkerEntity) {
-        if (marker.kind in setOf("speed","speed_advance","community_safety_zone_start","community_safety_zone_end","senior_safety_zone_start","senior_safety_zone_end")) {
+        if (marker.kind in setOf("speed","speed_advance","community_safety_zone_start","community_safety_zone_end","senior_safety_zone_start","senior_safety_zone_end","red_light_camera","camera")) {
             val nearby = dao.markersOfKindInBox(marker.kind, marker.latitude - 0.002, marker.latitude + 0.002, marker.longitude - 0.002, marker.longitude + 0.002)
             nearby.forEach { old ->
                 val d = FloatArray(1)
@@ -177,11 +177,11 @@ private fun RouteCollectorScreen() {
                             if (driveId != null) scope.launch {
                                 dao.latestPoint(driveId)?.let { point ->
                                     val snap = IntersectionSnapper.findNearestIntersection(point.latitude, point.longitude)
-                                    dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = snap?.latitude ?: point.latitude, longitude = snap?.longitude ?: point.longitude, kind = "red_light_camera", note = snap?.let { "Red light camera — ${it.intersectionName}; observed ${point.latitude},${point.longitude}" } ?: "Red light camera — intersection not confirmed; observed ${point.latitude},${point.longitude}"))
+                                    saveBoundaryMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = snap?.latitude ?: point.latitude, longitude = snap?.longitude ?: point.longitude, kind = "red_light_camera", note = snap?.let { "Red light camera — ${it.intersectionName}; observed ${point.latitude},${point.longitude}" } ?: "Red light camera — intersection not confirmed; observed ${point.latitude},${point.longitude}"))
                                     speakPrompt(if (snap != null) "Red light camera snapped to ${snap.intersectionName}" else "Red light camera marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f)) { Text("🚦📷") }
+                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF455A64), contentColor = Color.White)) { Text("🚦📷", style = MaterialTheme.typography.titleLarge) }
                         Button(onClick = {
                             val driveId = activeDriveId
                             if (driveId != null) scope.launch {
@@ -199,7 +199,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (paired) "Deer zone captured" else "Deer zone marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f)) { Text("🦌 ◆") }
+                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF455A64), contentColor = Color.White)) { Text("🦌 ◆", style = MaterialTheme.typography.titleLarge) }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {
@@ -439,6 +439,7 @@ private fun RouteCollectorScreen() {
                         travelBearing = travelBearing,
                         activeZones = activeZones,
                         postedSpeed = postedSpeed,
+                        actualSpeedKph = actualSpeed,
                         modifier = Modifier.fillMaxSize()
                     )
                 }

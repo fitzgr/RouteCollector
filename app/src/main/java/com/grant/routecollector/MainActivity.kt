@@ -47,8 +47,9 @@ private fun RouteCollectorScreen() {
     val activeDriveId by TrackingState.activeDriveId.collectAsStateWithLifecycle()
     val drives by dao.observeDrives().collectAsStateWithLifecycle(initialValue = emptyList())
     var showHistory by remember { mutableStateOf(false) }
+    var selectedHistoryDriveId by remember { mutableStateOf<Long?>(null) }
 
-    val effectiveDriveId = activeDriveId ?: drives.firstOrNull()?.id
+    val effectiveDriveId = activeDriveId ?: selectedHistoryDriveId ?: drives.firstOrNull()?.id
     val pointsFlow = remember(effectiveDriveId) { effectiveDriveId?.let { dao.observePoints(it) } ?: flowOf(emptyList()) }
     val markersFlow = remember(effectiveDriveId) { effectiveDriveId?.let { dao.observeMarkers(it) } ?: flowOf(emptyList()) }
     val points by pointsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -68,6 +69,8 @@ private fun RouteCollectorScreen() {
     var pendingSpeedChosen by remember { mutableStateOf(false) }
     var markerType by remember { mutableStateOf("Zone begins") }
     val activeZones by TrackingState.activeZoneKinds.collectAsStateWithLifecycle()
+    val activeRoadAlerts by TrackingState.activeRoadAlerts.collectAsStateWithLifecycle()
+    val overSpeedActive by TrackingState.overSpeedActive.collectAsStateWithLifecycle()
     val driverAlert by TrackingState.driverAlert.collectAsStateWithLifecycle()
     val travelBearing by TrackingState.latestBearingDegrees.collectAsStateWithLifecycle()
     val latestLat by TrackingState.latestLat.collectAsStateWithLifecycle()
@@ -152,7 +155,9 @@ private fun RouteCollectorScreen() {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     drives.take(10).forEach { drive ->
-                        Text("Drive #${drive.id} • ${if (drive.endedAt == null) "recording" else "saved"}")
+                        TextButton(onClick = { selectedHistoryDriveId = drive.id; showHistory = false }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Drive #${drive.id} • ${if (drive.endedAt == null) "recording" else "saved"}")
+                        }
                     }
                     if (drives.isEmpty()) Text("No recorded drives yet")
                 }
@@ -195,7 +200,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (snap != null) "Red light camera snapped to ${snap.intersectionName}" else "Red light camera marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF455A64), contentColor = Color.White)) { Text("🚦📷", style = MaterialTheme.typography.titleLarge) }
+                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = if ("camera" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFF1F3F4), contentColor = Color(0xFF263238))) { Text("🚦📷", style = MaterialTheme.typography.titleLarge) }
                         Button(onClick = {
                             val driveId = activeDriveId
                             if (driveId != null) scope.launch {
@@ -213,7 +218,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (paired) "Deer zone captured" else "Deer zone marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF455A64), contentColor = Color.White)) { Text("🦌 ◆", style = MaterialTheme.typography.titleLarge) }
+                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = if ("deer" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFF1F3F4), contentColor = Color(0xFF263238))) { Text("🦌  ◆", style = MaterialTheme.typography.headlineSmall, color = Color(0xFFFFC107)) }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {
@@ -233,7 +238,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Community safety end marked" else "Community safety start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(1.45f), colors = if ("community" in activeZones) ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White) else ButtonDefaults.buttonColors()) {
+                        }, modifier = Modifier.weight(1.30f), colors = ButtonDefaults.buttonColors(containerColor = if ("community" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) {
                             Text(if ("community" in activeZones) "Community ■" else "Community ▶")
                         }
                         Button(onClick = {
@@ -253,13 +258,13 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Senior safety end marked" else "Senior safety start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(1.05f), colors = if ("senior" in activeZones) ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White) else ButtonDefaults.buttonColors()) {
+                        }, modifier = Modifier.weight(1.0f), colors = ButtonDefaults.buttonColors(containerColor = if ("senior" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) {
                             Text(if ("senior" in activeZones) "Senior ■" else "Senior ▶")
                         }
                         Button(onClick = {
                             if (!pendingSpeedChosen) markerSpeed = postedSpeed?.takeIf { it in listOf(40,50,60,70,80,90,100,110) } ?: 60
                             showSpeedMarker = !showSpeedMarker
-                        }, modifier = Modifier.weight(0.75f)) { Text("Speed") }
+                        }, modifier = Modifier.weight(0.90f), colors = ButtonDefaults.buttonColors(containerColor = if (overSpeedActive) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) { Text("Speed", maxLines = 1) }
                     }
                     if (showSpeedMarker) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -434,7 +439,7 @@ private fun RouteCollectorScreen() {
                     context.stopService(Intent(context, CollectorOverlayService::class.java))
                     context.stopService(Intent(context, RouteMarkerMapOverlayService::class.java))
                 }
-            }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+            }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = if (activeDriveId == null) MaterialTheme.colorScheme.primary else Color(0xFFDDEEDD), contentColor = if (activeDriveId == null) MaterialTheme.colorScheme.onPrimary else Color(0xFF263238))) {
                 Text(if (activeDriveId == null) "Start drive" else "Stop drive")
             }
 

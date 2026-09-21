@@ -52,6 +52,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val REVERSE_DIRECTION_MIN_DEGREES = 120f
         private const val OSM_SPEED_RETRY_MILLIS = 30_000L
         private const val SPEED_RECOVERY_HYSTERESIS_KPH = 2f
+        private const val ZONE_TURN_EXIT_DEGREES = 65f
         private const val DEER_PAIR_MAX_METRES = 20_000f
     }
 
@@ -81,6 +82,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private var lastOsmSpeedAttemptElapsedRealtime = 0L
     private var osmSpeedLookupInFlight = false
     private var speedZoneManuallyCleared = false
+    private val activeZoneEntryBearings = mutableMapOf<String, Float>()
     private var musicPausedForPrompt = false
     private val pendingSpeech = mutableListOf<String>()
     private var speechInProgress = 0
@@ -91,7 +93,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             for (location in result.locations) {
                 TrackingState.latestLat.value = location.latitude; TrackingState.latestLon.value = location.longitude
                 val actualSpeedKph = if (location.hasSpeed()) location.speed * 3.6f else null
-                TrackingState.latestSpeedKph.value = actualSpeedKph; updateTravelBearing(location, actualSpeedKph); bootstrapPostedSpeedFromOsm(location); checkOverSpeedThreshold(actualSpeedKph); checkAutomaticBackup(actualSpeedKph)
+                TrackingState.latestSpeedKph.value = actualSpeedKph; updateTravelBearing(location, actualSpeedKph); clearSafetyZonesAfterTurn(); bootstrapPostedSpeedFromOsm(location); checkOverSpeedThreshold(actualSpeedKph); checkAutomaticBackup(actualSpeedKph)
                 scope.launch { dao.insertPoint(TrackPointEntity(driveId = id, timestamp = location.time, latitude = location.latitude, longitude = location.longitude, accuracyMetres = location.accuracy, speedMps = if (location.hasSpeed()) location.speed else null)); announceNearbyRoadFacts(location) }
             }
         }
@@ -130,7 +132,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         if (stoppedSince == null) { stoppedSinceElapsedRealtime = now; return }; if (autoBackupDoneForCurrentStop || now - stoppedSince < AUTO_BACKUP_STOPPED_MILLIS) return; autoBackupDoneForCurrentStop = true
         scope.launch { try { val id = driveId ?: return@launch; dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) }; val fileName = RouteDataExporter.exportToDownloads(this@DriveTrackingService, dao, automatic = true); TrackingState.postDriverAlert("Route backed up and drive ended after 10 minutes stopped: $fileName", kind = "auto_backup"); finishAfterAutomaticBackup() } catch (_: Exception) { autoBackupDoneForCurrentStop = false; TrackingState.postDriverAlert("Automatic route data backup failed", kind = "auto_backup_error") } }
     }
-    private fun finishAfterAutomaticBackup() { client.removeLocationUpdates(callback); driveId = null; currentSpeedLimit = null; overSpeedAlertActive = false; stoppedSinceElapsedRealtime = null; previousMarkerDistances.clear(); markerBearingCache.clear(); TrackingState.activeDriveId.value = null; TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); stopService(Intent(this, CollectorOverlayService::class.java)); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun finishAfterAutomaticBackup() { client.removeLocationUpdates(callback); driveId = null; currentSpeedLimit = null; overSpeedAlertActive = false; stoppedSinceElapsedRealtime = null; previousMarkerDistances.clear(); markerBearingCache.clear(); activeZoneEntryBearings.clear(); TrackingState.activeDriveId.value = null; TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); stopService(Intent(this, CollectorOverlayService::class.java)); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     private fun defaultTolerance(speed: Int): Int = if (speed >= 100) 9 else 8
     private fun getSpeedTolerance(speed: Int): Int = getSharedPreferences(PREFS, MODE_PRIVATE).getInt("$PREF_SPEED_TOLERANCE_PREFIX$speed", defaultTolerance(speed))
     private fun checkOverSpeedThreshold(actualSpeedKph: Float?) {
@@ -183,9 +185,23 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private fun normalizeBearing(value: Float): Float = ((value % 360f) + 360f) % 360f
     private fun bearingDifference(a: Float, b: Float): Float { val raw = abs(normalizeBearing(a) - normalizeBearing(b)); return if (raw > 180f) 360f - raw else raw }
 
+    private fun clearSafetyZonesAfterTurn() {
+        val travel = currentTravelBearing ?: return
+        val active = TrackingState.activeZoneKinds.value
+        if (active.isEmpty()) return
+        val exited = active.filter { zone ->
+            val entry = activeZoneEntryBearings[zone] ?: return@filter false
+            bearingDifference(entry, travel) >= ZONE_TURN_EXIT_DEGREES
+        }.toSet()
+        if (exited.isNotEmpty()) {
+            TrackingState.activeZoneKinds.value = active - exited
+            exited.forEach { activeZoneEntryBearings.remove(it) }
+        }
+    }
+
     private fun handleZoneFact(fact: MarkerEntity, distance: Float, approaching: Boolean) {
         if (fact.id in announcedMarkerIds || !approaching || distance > ACTIVE_ZONE_RADIUS_METRES) return
-        val phrase = when (fact.kind) { "community_safety_zone_start", "school_zone", "school_zone_start" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "community"; "Entering community zone" }; "community_safety_zone_end", "school_zone_end" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"; "Leaving community zone" }; "senior_safety_zone_start" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "senior"; "Entering senior zone" }; "senior_safety_zone_end" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"; "Leaving senior zone" }; else -> null } ?: return
+        val phrase = when (fact.kind) { "community_safety_zone_start", "school_zone", "school_zone_start" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "community"; currentTravelBearing?.let { activeZoneEntryBearings["community"] = it }; "Entering community zone" }; "community_safety_zone_end", "school_zone_end" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"; activeZoneEntryBearings.remove("community"); "Leaving community zone" }; "senior_safety_zone_start" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "senior"; currentTravelBearing?.let { activeZoneEntryBearings["senior"] = it }; "Entering senior zone" }; "senior_safety_zone_end" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"; activeZoneEntryBearings.remove("senior"); "Leaving senior zone" }; else -> null } ?: return
         announcedMarkerIds += fact.id; speak(phrase)
     }
     private fun handleRedLightCamera(fact: MarkerEntity, distance: Float, approaching: Boolean, warningMetres: Float) { if (approaching && distance <= warningMetres && distance > ACTIVE_ZONE_RADIUS_METRES && fact.id !in warnedCameraMarkerIds) { warnedCameraMarkerIds += fact.id; speak("Red-light-camera") }; if (approaching && distance <= ACTIVE_ZONE_RADIUS_METRES && fact.id !in verifiedCameraMarkerIds) { verifiedCameraMarkerIds += fact.id; TrackingState.postDriverAlert(text = "Red light camera", kind = "red_light_camera_remove_available", markerId = fact.id) } }

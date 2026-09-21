@@ -120,6 +120,20 @@ private fun RouteCollectorScreen() {
             if (community?.kind == "community_safety_zone_start") restored = restored + "community"
             if (senior?.kind == "senior_safety_zone_start") restored = restored + "senior"
             if (restored != TrackingState.activeZoneKinds.value) TrackingState.activeZoneKinds.value = restored
+
+            // Keep only the newest marker when same-kind captures overlap in the same place.
+            val dedupeKinds = setOf("red_light_camera","camera","deer_zone_enter","speed","speed_advance","community_safety_zone_start","community_safety_zone_end","senior_safety_zone_start","senior_safety_zone_end")
+            val kept = mutableListOf<MarkerEntity>()
+            markers.filter { it.kind in dedupeKinds }.sortedByDescending { it.timestamp }.forEach { candidate ->
+                val overlapsNewer = kept.any { newer ->
+                    if (newer.kind != candidate.kind) false else {
+                        val d = FloatArray(1)
+                        android.location.Location.distanceBetween(candidate.latitude, candidate.longitude, newer.latitude, newer.longitude, d)
+                        d[0] <= 120f
+                    }
+                }
+                if (overlapsNewer) dao.deleteMarker(candidate.id) else kept += candidate
+            }
         }
     }
 

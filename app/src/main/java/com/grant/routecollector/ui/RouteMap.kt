@@ -33,6 +33,7 @@ fun RouteMap(
     travelBearing: Float?,
     activeZones: Set<String>,
     postedSpeed: Int?,
+    actualSpeedKph: Float?,
     modifier: Modifier = Modifier
 ) {
     AndroidView(
@@ -44,8 +45,14 @@ fun RouteMap(
             }
         },
         update = { map ->
-            val previousCenter = map.mapCenter
             map.overlays.clear()
+
+            val targetZoom = speedSensitiveZoom(actualSpeedKph)
+            val currentZoom = map.zoomLevelDouble
+            val zoomDelta = (targetZoom - currentZoom).coerceIn(-0.35, 0.35)
+            if (kotlin.math.abs(targetZoom - currentZoom) >= 0.10) {
+                map.controller.setZoom(currentZoom + zoomDelta)
+            }
 
             if (points.isNotEmpty()) {
                 val geo = points.map { GeoPoint(it.latitude, it.longitude) }
@@ -200,4 +207,16 @@ private fun activeZoneRing(color: Int, density: Float): Drawable = GradientDrawa
     setColor(Color.TRANSPARENT)
     setStroke((6 * density).toInt(), color)
     setSize((58 * density).toInt(), (58 * density).toInt())
+}
+
+
+private fun speedSensitiveZoom(speedKph: Float?): Double {
+    val speed = (speedKph ?: 100f).coerceIn(0f, 110f)
+    return when {
+        speed <= 30f -> 18.0
+        speed <= 50f -> 18.0 - ((speed - 30f) / 20f) * 0.8
+        speed <= 80f -> 17.2 - ((speed - 50f) / 30f) * 0.8
+        speed <= 100f -> 16.4 - ((speed - 80f) / 20f) * 0.4
+        else -> 16.0
+    }
 }

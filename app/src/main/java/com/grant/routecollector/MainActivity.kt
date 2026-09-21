@@ -459,6 +459,7 @@ private fun RouteCollectorScreen() {
                         activeZones = activeZones,
                         postedSpeed = postedSpeed,
                         actualSpeedKph = actualSpeed,
+                        fitRoute = activeDriveId == null && selectedHistoryDriveId != null,
                         modifier = Modifier.fillMaxSize()
                     )
                 }

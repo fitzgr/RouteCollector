@@ -34,6 +34,7 @@ fun RouteMap(
     activeZones: Set<String>,
     postedSpeed: Int?,
     actualSpeedKph: Float?,
+    fitRoute: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     AndroidView(
@@ -102,6 +103,15 @@ fun RouteMap(
                 }
             } else if (points.isNotEmpty()) {
                 map.controller.setCenter(GeoPoint(points.last().latitude, points.last().longitude))
+            }
+
+            if (fitRoute && points.size >= 2) {
+                val box = org.osmdroid.util.BoundingBox.fromGeoPoints(points.map { GeoPoint(it.latitude, it.longitude) })
+                map.post { if (map.width > 0 && map.height > 0) map.zoomToBoundingBox(box, true, 64) }
+                val start = points.first()
+                val end = points.last()
+                map.overlays.add(Marker(map).apply { position = GeoPoint(start.latitude, start.longitude); title = "Start"; icon = zoneMarker(Color.rgb(46,125,50), map.context.resources.displayMetrics.density); setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER) })
+                map.overlays.add(Marker(map).apply { position = GeoPoint(end.latitude, end.longitude); title = "End"; icon = zoneMarker(Color.rgb(198,40,40), map.context.resources.displayMetrics.density); setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER) })
             }
 
             val visibleMarkers = if (current == null || travelBearing == null) {

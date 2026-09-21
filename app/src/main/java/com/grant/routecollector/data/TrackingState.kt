@@ -18,6 +18,8 @@ object TrackingState {
     val currentPostedSpeed = MutableStateFlow<Int?>(null)
     val currentSpeedIsCollected = MutableStateFlow(false)
     val activeZoneKinds = MutableStateFlow<Set<String>>(emptySet())
+    val activeRoadAlerts = MutableStateFlow<Set<String>>(emptySet())
+    val overSpeedActive = MutableStateFlow(false)
     val driverAlert = MutableStateFlow<DriverAlert?>(null)
 
     fun postDriverAlert(text: String, kind: String = "info", markerId: Long? = null) {

@@ -293,7 +293,7 @@ private fun RouteCollectorScreen() {
                             Text(if ("senior" in activeZones) "Senior ■" else "Senior ▶")
                         }
                         Button(onClick = {
-                            if (!pendingSpeedChosen) markerSpeed = postedSpeed?.takeIf { it in listOf(40,50,60,70,80,90,100,110) } ?: 60
+                            if (!pendingSpeedChosen) markerSpeed = postedSpeed?.takeIf { it in listOf(30,40,50,60,70,80,90,100,110) } ?: 60
                             showSpeedMarker = !showSpeedMarker
                         }, modifier = Modifier.weight(0.90f), colors = ButtonDefaults.buttonColors(containerColor = if (overSpeedActive) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) { Text("Speed", maxLines = 1) }
                     }
@@ -304,7 +304,7 @@ private fun RouteCollectorScreen() {
                             Box(Modifier.weight(1f)) {
                                 OutlinedButton(onClick = { speedMenu = true }, modifier = Modifier.fillMaxWidth()) { Text("$markerSpeed km/h") }
                                 DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
-                                    listOf(40,50,60,70,80,90,100,110).forEach { speed ->
+                                    listOf(30,40,50,60,70,80,90,100,110).forEach { speed ->
                                         DropdownMenuItem(
                                             text = { Text(if (speed == markerSpeed) "✓  $speed km/h" else "   $speed km/h") },
                                             onClick = { markerSpeed = speed; pendingSpeedChosen = true; speedMenu = false },

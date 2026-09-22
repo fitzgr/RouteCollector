@@ -346,7 +346,7 @@ private fun RouteCollectorScreen() {
                                             driveId = driveId, timestamp = System.currentTimeMillis(),
                                             latitude = point.latitude, longitude = point.longitude,
                                             kind = if (advance) "speed_advance" else "speed",
-                                            note = if (advance) "Speed limit $markerSpeed advance sign" else "Speed limit $markerSpeed"
+                                            note = (if (advance) "Speed limit $markerSpeed advance sign" else "Speed limit $markerSpeed") + "; bearing=${travelBearing?.roundToInt() ?: -1}"
                                         ))
                                         if (!advance) {
                                             TrackingState.currentSpeedIsCollected.value = true

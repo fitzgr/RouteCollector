@@ -75,6 +75,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private val announcedMarkerIds = mutableSetOf<Long>()
     private val warnedCameraMarkerIds = mutableSetOf<Long>()
     private val verifiedCameraMarkerIds = mutableSetOf<Long>()
+    private val camerasCurrentlyInRange = mutableSetOf<Long>()
     private val passiveReverseMarkerIds = mutableSetOf<Long>()
     private val previousMarkerDistances = mutableMapOf<Long, Float>()
     private val markerBearingCache = mutableMapOf<Long, Float?>()
@@ -114,7 +115,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             ACTION_START -> {
                 driveId = intent.getLongExtra(EXTRA_DRIVE_ID, -1L).takeIf { it > 0 }
                 driveId?.let {
-                    warnedReductionMarkerIds.clear(); announcedMarkerIds.clear(); warnedCameraMarkerIds.clear(); verifiedCameraMarkerIds.clear(); passiveReverseMarkerIds.clear(); previousMarkerDistances.clear(); markerBearingCache.clear()
+                    warnedReductionMarkerIds.clear(); announcedMarkerIds.clear(); warnedCameraMarkerIds.clear(); verifiedCameraMarkerIds.clear(); camerasCurrentlyInRange.clear(); passiveReverseMarkerIds.clear(); previousMarkerDistances.clear(); markerBearingCache.clear()
                     previousLocationForBearing = null; currentTravelBearing = null; currentSpeedLimit = null; overSpeedAlertActive = false; stoppedSinceElapsedRealtime = null; walkingSinceElapsedRealtime = null; drivingWasConfirmed = false; autoBackupDoneForCurrentStop = false; lastOsmSpeedAttemptElapsedRealtime = 0L; osmSpeedLookupInFlight = false; speedZoneManuallyCleared = false
                     TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); TrackingState.currentSpeedIsCollected.value = false; TrackingState.activeDriveId.value = it
                     startForeground(NOTIFICATION_ID, buildNotification()); beginUpdates()
@@ -152,7 +153,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         val now = SystemClock.elapsedRealtime()
         val since = walkingSinceElapsedRealtime ?: run {
             walkingSinceElapsedRealtime = now
-            TrackingState.walkingAutoStopSeconds.value = 45
+            TrackingState.walkingAutoStopSeconds.value = (WALKING_AUTO_END_MILLIS / 1000L).toInt()
             return false
         }
         val remaining = ((WALKING_AUTO_END_MILLIS - (now - since)).coerceAtLeast(0L) + 999L) / 1000L
@@ -239,6 +240,16 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         }.toSet()
         if (exited.isNotEmpty()) {
             TrackingState.activeZoneKinds.value = active - exited
+            val id = driveId
+            val lat = TrackingState.latestLat.value
+            val lon = TrackingState.latestLon.value
+            if (id != null && lat != null && lon != null) {
+                exited.forEach { zone ->
+                    val kind = if (zone == "community") "community_safety_zone_end" else "senior_safety_zone_end"
+                    val label = if (zone == "community") "Community safety zone end" else "Senior safety zone end"
+                    scope.launch { dao.insertMarker(MarkerEntity(driveId = id, timestamp = System.currentTimeMillis(), latitude = lat, longitude = lon, kind = kind, note = "$label; automatic turn exit")) }
+                }
+            }
             exited.forEach { activeZoneEntryBearings.remove(it) }
         }
     }
@@ -248,7 +259,12 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         val phrase = when (fact.kind) { "community_safety_zone_start", "school_zone", "school_zone_start" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "community"; currentTravelBearing?.let { activeZoneEntryBearings["community"] = it }; "Entering community zone" }; "community_safety_zone_end", "school_zone_end" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"; activeZoneEntryBearings.remove("community"); "Leaving community zone" }; "senior_safety_zone_start" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "senior"; currentTravelBearing?.let { activeZoneEntryBearings["senior"] = it }; "Entering senior zone" }; "senior_safety_zone_end" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"; activeZoneEntryBearings.remove("senior"); "Leaving senior zone" }; else -> null } ?: return
         announcedMarkerIds += fact.id; speak(phrase)
     }
-    private fun handleRedLightCamera(fact: MarkerEntity, distance: Float, approaching: Boolean, warningMetres: Float) { if (distance <= warningMetres) TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value + "camera" else if (fact.id in verifiedCameraMarkerIds || fact.id in warnedCameraMarkerIds) TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "camera"; if (approaching && distance <= warningMetres && distance > ACTIVE_ZONE_RADIUS_METRES && fact.id !in warnedCameraMarkerIds) { warnedCameraMarkerIds += fact.id; speak("Red-light-camera") }; if (approaching && distance <= ACTIVE_ZONE_RADIUS_METRES && fact.id !in verifiedCameraMarkerIds) { verifiedCameraMarkerIds += fact.id; TrackingState.postDriverAlert(text = "Red light camera", kind = "red_light_camera_remove_available", markerId = fact.id) } }
+    private fun handleRedLightCamera(fact: MarkerEntity, distance: Float, approaching: Boolean, warningMetres: Float) {
+        if (distance <= warningMetres) camerasCurrentlyInRange += fact.id else camerasCurrentlyInRange -= fact.id
+        TrackingState.activeRoadAlerts.value = if (camerasCurrentlyInRange.isNotEmpty()) TrackingState.activeRoadAlerts.value + "camera" else TrackingState.activeRoadAlerts.value - "camera"
+        if (approaching && distance <= warningMetres && distance > ACTIVE_ZONE_RADIUS_METRES && fact.id !in warnedCameraMarkerIds) { warnedCameraMarkerIds += fact.id; speak("Red-light-camera") }
+        if (approaching && distance <= ACTIVE_ZONE_RADIUS_METRES && fact.id !in verifiedCameraMarkerIds) { verifiedCameraMarkerIds += fact.id; TrackingState.postDriverAlert(text = "Red light camera", kind = "red_light_camera_remove_available", markerId = fact.id) }
+    }
     private fun parseSpeed(note: String): Int? = Regex("\\b(20|30|40|50|60|70|80|90|100|110|120)\\b").find(note)?.groupValues?.getOrNull(1)?.toIntOrNull()
     private fun speak(text: String) {
         TrackingState.postDriverAlert(text)

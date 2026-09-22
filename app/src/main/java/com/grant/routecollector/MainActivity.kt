@@ -32,6 +32,7 @@ import com.grant.routecollector.service.RouteMarkerMapOverlayService
 import com.grant.routecollector.ui.RouteMap
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -89,6 +90,8 @@ private fun RouteCollectorScreen() {
         dao.insertMarker(marker)
     }
 
+    fun pairId(note: String): String? = Regex("pair=([A-Za-z0-9-]+)").find(note)?.groupValues?.getOrNull(1)
+
     suspend fun deleteNearestZonePair(type: String): Boolean {
         val lat = TrackingState.latestLat.value ?: return false
         val lon = TrackingState.latestLon.value ?: return false
@@ -96,6 +99,12 @@ private fun RouteCollectorScreen() {
         if (zoneMarkers.isEmpty()) return false
         fun distance(m: MarkerEntity): Float = FloatArray(1).also { android.location.Location.distanceBetween(lat, lon, m.latitude, m.longitude, it) }[0]
         val nearest = zoneMarkers.minByOrNull { distance(it) } ?: return false
+        val pairedId = pairId(nearest.note)
+        if (pairedId != null) {
+            zoneMarkers.filter { pairId(it.note) == pairedId }.forEach { dao.deleteMarker(it.id) }
+            return true
+        }
+        // Legacy markers without pair IDs retain the proximity fallback.
         val startKind = if (type == "community") "community_safety_zone_start" else "senior_safety_zone_start"
         val endKind = if (type == "community") "community_safety_zone_end" else "senior_safety_zone_end"
         val counterpartKind = if (nearest.kind == startKind) endKind else startKind
@@ -103,10 +112,7 @@ private fun RouteCollectorScreen() {
             FloatArray(1).also { android.location.Location.distanceBetween(nearest.latitude, nearest.longitude, candidate.latitude, candidate.longitude, it) }[0]
         }
         dao.deleteMarker(nearest.id)
-        counterpart?.let {
-            val d = FloatArray(1); android.location.Location.distanceBetween(nearest.latitude, nearest.longitude, it.latitude, it.longitude, d)
-            if (d[0] <= 20_000f) dao.deleteMarker(it.id)
-        }
+        counterpart?.let { val d = FloatArray(1); android.location.Location.distanceBetween(nearest.latitude, nearest.longitude, it.latitude, it.longitude, d); if (d[0] <= 20_000f) dao.deleteMarker(it.id) }
         return true
     }
 
@@ -209,13 +215,16 @@ private fun RouteCollectorScreen() {
                                 dao.latestPoint(driveId)?.let { point ->
                                     val bearing = travelBearing
                                     val existing = dao.getDeerZoneMarkers()
-                                    dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = "deer_zone_enter", note = "Deer zone entering; bearing=${bearing?.roundToInt() ?: -1}"))
+                                    var matchedDeer: MarkerEntity? = null
                                     val paired = bearing != null && existing.any { other ->
                                         val saved = Regex("bearing=(-?\\d+)").find(other.note)?.groupValues?.getOrNull(1)?.toFloatOrNull()?.takeIf { it >= 0f } ?: return@any false
                                         val dist = FloatArray(1); android.location.Location.distanceBetween(point.latitude, point.longitude, other.latitude, other.longitude, dist)
                                         val raw = abs((((bearing % 360f) + 360f) % 360f) - (((saved % 360f) + 360f) % 360f)); val diff = if (raw > 180f) 360f - raw else raw
-                                        dist[0] <= 20_000f && diff >= 120f
+                                        (dist[0] <= 20_000f && diff >= 120f).also { if (it) matchedDeer = other }
                                     }
+                                    val deerPairId = matchedDeer?.let { pairId(it.note) ?: UUID.randomUUID().toString() }
+                                    if (matchedDeer != null && deerPairId != null && pairId(matchedDeer!!.note) == null) dao.updateMarker(matchedDeer!!.copy(note = matchedDeer!!.note + "; pair=$deerPairId"))
+                                    dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = "deer_zone_enter", note = "Deer zone entering; bearing=${bearing?.roundToInt() ?: -1}" + (deerPairId?.let { "; pair=$it" } ?: "")))
                                     if (paired) ToneGenerator(AudioManager.STREAM_NOTIFICATION, 90).apply { startTone(ToneGenerator.TONE_PROP_BEEP2, 220); android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ release() }, 300) }
                                     speakPrompt(if (paired) "Deer zone captured" else "Deer zone marked")
                                 }
@@ -228,12 +237,15 @@ private fun RouteCollectorScreen() {
                             if (driveId != null) scope.launch {
                                 dao.latestPoint(driveId)?.let { point ->
                                     val isActive = "community" in activeZones
+                                    val pairKey = "active_pair_community"
+                                    val zonePairId = if (isActive) prefs.getString(pairKey, null) ?: UUID.randomUUID().toString() else UUID.randomUUID().toString()
                                     saveBoundaryMarker(MarkerEntity(
                                         driveId = driveId, timestamp = System.currentTimeMillis(),
                                         latitude = point.latitude, longitude = point.longitude,
                                         kind = if (isActive) "community_safety_zone_end" else "community_safety_zone_start",
-                                        note = if (isActive) "Community safety zone end" else "Community safety zone start"
+                                        note = (if (isActive) "Community safety zone end" else "Community safety zone start") + "; pair=$zonePairId"
                                     ))
+                                    if (isActive) prefs.edit().remove(pairKey).apply() else prefs.edit().putString(pairKey, zonePairId).apply()
                                     TrackingState.activeZoneKinds.value =
                                         if (isActive) TrackingState.activeZoneKinds.value - "community"
                                         else TrackingState.activeZoneKinds.value + "community"
@@ -248,12 +260,15 @@ private fun RouteCollectorScreen() {
                             if (driveId != null) scope.launch {
                                 dao.latestPoint(driveId)?.let { point ->
                                     val isActive = "senior" in activeZones
+                                    val pairKey = "active_pair_senior"
+                                    val zonePairId = if (isActive) prefs.getString(pairKey, null) ?: UUID.randomUUID().toString() else UUID.randomUUID().toString()
                                     saveBoundaryMarker(MarkerEntity(
                                         driveId = driveId, timestamp = System.currentTimeMillis(),
                                         latitude = point.latitude, longitude = point.longitude,
                                         kind = if (isActive) "senior_safety_zone_end" else "senior_safety_zone_start",
-                                        note = if (isActive) "Senior safety zone end" else "Senior safety zone start"
+                                        note = (if (isActive) "Senior safety zone end" else "Senior safety zone start") + "; pair=$zonePairId"
                                     ))
+                                    if (isActive) prefs.edit().remove(pairKey).apply() else prefs.edit().putString(pairKey, zonePairId).apply()
                                     TrackingState.activeZoneKinds.value =
                                         if (isActive) TrackingState.activeZoneKinds.value - "senior"
                                         else TrackingState.activeZoneKinds.value + "senior"
@@ -431,6 +446,8 @@ private fun RouteCollectorScreen() {
                 if (activeDriveId == null) {
                     scope.launch {
                         val id = dao.insertDrive(DriveEntity(startedAt = System.currentTimeMillis()))
+                        dao.pruneOldDrives(10)
+                        selectedHistoryDriveId = null
                         ContextCompat.startForegroundService(context, Intent(context, DriveTrackingService::class.java).apply {
                             action = DriveTrackingService.ACTION_START
                             putExtra(DriveTrackingService.EXTRA_DRIVE_ID, id)

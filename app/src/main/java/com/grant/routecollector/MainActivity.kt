@@ -185,8 +185,8 @@ private fun RouteCollectorScreen() {
             // automatically receives whatever screen space remains.
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        TextButton(onClick = { showHistory = true }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) { Text("History", style = MaterialTheme.typography.bodySmall) }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Collector", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                         Button(onClick = {
                             if (activeDriveId == null) scope.launch {
                                 val id = dao.insertDrive(DriveEntity(startedAt = System.currentTimeMillis()))
@@ -197,8 +197,9 @@ private fun RouteCollectorScreen() {
                                 TrackingState.postDriverAlert("Drive saved", kind = "drive_saved")
                                 context.stopService(Intent(context, CollectorOverlayService::class.java)); context.stopService(Intent(context, RouteMarkerMapOverlayService::class.java))
                             }
-                        }, modifier = Modifier.weight(1f).height(40.dp), colors = ButtonDefaults.buttonColors(containerColor = if (activeDriveId == null) Color(0xFFDDEEDD) else Color(0xFFF4C7C3), contentColor = Color(0xFF263238)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text(if (activeDriveId == null) "▶  Start" else "■  Stop") }
-                        TextButton(onClick = { showSettings = !showSettings }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("⚙") }
+                        }, modifier = Modifier.height(34.dp), colors = ButtonDefaults.buttonColors(containerColor = if (activeDriveId == null) Color(0xFFDDEEDD) else Color(0xFFF4C7C3), contentColor = Color(0xFF263238)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text(if (activeDriveId == null) "▶ Start" else "■ Stop", style = MaterialTheme.typography.bodySmall) }
+                        TextButton(onClick = { showHistory = true }, modifier = Modifier.height(34.dp), contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp)) { Text("History", style = MaterialTheme.typography.bodySmall) }
+                        TextButton(onClick = { showSettings = !showSettings }, modifier = Modifier.height(34.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) { Text("⚙") }
                     }
                     Text(
                         "${if (collectedSpeed) "Collected" else "Posted"} ${postedSpeed?.let { "$it km/h" } ?: "--"}   Actual ${actualSpeed?.let { "${it.toInt()} km/h" } ?: "--"}",
@@ -218,7 +219,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (snap != null) "Marked camera at ${snap.intersectionName}" else "Red light camera marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = if ("camera" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFF1F3F4), contentColor = Color(0xFF263238))) { Text("🚦📷", style = MaterialTheme.typography.titleLarge) }
+                        }, enabled = activeDriveId != null, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("camera" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFF1F3F4), contentColor = Color(0xFF263238))) { Text("🚦📷", style = MaterialTheme.typography.titleLarge) }
                         Button(onClick = {
                             val driveId = activeDriveId
                             if (driveId != null) scope.launch {
@@ -239,7 +240,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (paired) "Deer zone captured" else "Deer zone marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = if ("deer" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFF1F3F4), contentColor = Color(0xFF263238))) { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Text("🦌", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF263238)); Box(Modifier.size(28.dp)) { Text("◆", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF111111)); Text("◆", style = MaterialTheme.typography.titleLarge, color = Color(0xFFFFD600), modifier = Modifier.padding(3.dp)) } } }
+                        }, enabled = activeDriveId != null, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("deer" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFF1F3F4), contentColor = Color(0xFF263238))) { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { Text("🦌", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF263238)); Box(Modifier.size(34.dp)) { Text("◆", style = MaterialTheme.typography.headlineMedium, color = Color(0xFF111111)); Text("◆", style = MaterialTheme.typography.headlineSmall, color = Color(0xFFFFD600), modifier = Modifier.padding(3.dp)) } } }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {

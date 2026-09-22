@@ -177,18 +177,14 @@ private fun RouteCollectorScreen() {
     }
 
     Scaffold { padding ->
-        BoxWithConstraints(
-            Modifier.padding(padding).padding(horizontal = 10.dp, vertical = 4.dp).fillMaxSize()
+        Column(
+            Modifier.padding(padding).padding(horizontal = 10.dp, vertical = 4.dp).fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            val mapHeight = maxHeight / 2
-            Column(
-                Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-            // Collector owns a compact fixed-height control area. The map is constrained
-            // to the remaining space and can never cover or push these controls off-screen.
+            // The collector card sizes itself to its active controls. The map below
+            // automatically receives whatever screen space remains.
             Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp).heightIn(max = mapHeight - 56.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         TextButton(onClick = { showHistory = true }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) { Text("History", style = MaterialTheme.typography.bodySmall) }
                         Button(onClick = {
@@ -395,7 +391,7 @@ private fun RouteCollectorScreen() {
                             }) { Text("Remove") }
                         }
                     }
-                    if (postedSpeed != null || activeZones.isNotEmpty()) {
+                    if (postedSpeed != null || activeZones.isNotEmpty() || activeRoadAlerts.isNotEmpty()) {
                         Text("Active zones", style = MaterialTheme.typography.labelMedium)
                         if (postedSpeed != null) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -451,18 +447,60 @@ private fun RouteCollectorScreen() {
                                 }) { Text("Delete") }
                             }
                         }
+                        if ("camera" in activeRoadAlerts) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Red-light camera", modifier = Modifier.weight(1f))
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        val lat = TrackingState.latestLat.value
+                                        val lon = TrackingState.latestLon.value
+                                        val nearest = if (lat != null && lon != null) dao.getSpokenRoadFacts()
+                                            .filter { it.kind == "camera" || it.kind == "red_light_camera" }
+                                            .minByOrNull { marker ->
+                                                FloatArray(1).also { android.location.Location.distanceBetween(lat, lon, marker.latitude, marker.longitude, it) }[0]
+                                            } else null
+                                        if (nearest != null) dao.deleteMarker(nearest.id)
+                                        TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "camera"
+                                        speakPrompt(if (nearest != null) "Red light camera removed" else "Camera alert cleared")
+                                    }
+                                }) { Text("Remove") }
+                            }
+                        }
+                        if ("deer" in activeRoadAlerts) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Deer crossing area", modifier = Modifier.weight(1f))
+                                TextButton(onClick = {
+                                    TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
+                                    speakPrompt("Deer zone cleared")
+                                }) { Text("Clear") }
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        val lat = TrackingState.latestLat.value
+                                        val lon = TrackingState.latestLon.value
+                                        val deer = dao.getDeerZoneMarkers()
+                                        val nearest = if (lat != null && lon != null) deer.minByOrNull { marker ->
+                                            FloatArray(1).also { android.location.Location.distanceBetween(lat, lon, marker.latitude, marker.longitude, it) }[0]
+                                        } else null
+                                        val id = nearest?.let { pairId(it.note) }
+                                        if (id != null) deer.filter { pairId(it.note) == id }.forEach { dao.deleteMarker(it.id) }
+                                        else if (nearest != null) dao.deleteMarker(nearest.id)
+                                        TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
+                                        speakPrompt(if (nearest != null) "Deer zone deleted" else "No deer zone found")
+                                    }
+                                }) { Text("Delete") }
+                            }
+                        }
                     }
 
                 }
             }
 
 
-                Spacer(Modifier.weight(1f))
                 HorizontalDivider()
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .height(mapHeight)
+                        .weight(1f)
                 ) {
                     RouteMap(
                         points = points,

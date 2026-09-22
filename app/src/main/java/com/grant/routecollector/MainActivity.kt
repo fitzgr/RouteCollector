@@ -10,6 +10,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -178,7 +180,7 @@ private fun RouteCollectorScreen() {
             // Collector owns a compact fixed-height control area. The map is constrained
             // to the remaining space and can never cover or push these controls off-screen.
             Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp).heightIn(max = mapHeight - 56.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Collector", style = MaterialTheme.typography.titleMedium)
                         Row {
@@ -218,7 +220,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (paired) "Deer zone captured" else "Deer zone marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = if ("deer" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFF1F3F4), contentColor = Color(0xFF263238))) { Text("🦌  ◆", style = MaterialTheme.typography.headlineSmall, color = Color(0xFFFFC107)) }
+                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = if ("deer" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFF1F3F4), contentColor = Color(0xFF263238))) { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Text("🦌", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF263238)); Box(Modifier.size(28.dp)) { Text("◆", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF111111)); Text("◆", style = MaterialTheme.typography.titleLarge, color = Color(0xFFFFD600), modifier = Modifier.padding(3.dp)) } } }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {
@@ -458,6 +460,8 @@ private fun RouteCollectorScreen() {
                         travelBearing = travelBearing,
                         activeZones = activeZones,
                         postedSpeed = postedSpeed,
+                        collectedSpeedActive = collectedSpeed,
+                        activeRoadAlerts = activeRoadAlerts,
                         actualSpeedKph = actualSpeed,
                         fitRoute = activeDriveId == null && selectedHistoryDriveId != null,
                         modifier = Modifier.fillMaxSize()

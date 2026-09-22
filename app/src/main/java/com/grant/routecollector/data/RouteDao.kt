@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 interface RouteDao {
     @Insert suspend fun insertDrive(drive: DriveEntity): Long
     @Update suspend fun updateDrive(drive: DriveEntity)
+    @Update suspend fun updateMarker(marker: MarkerEntity)
     @Insert suspend fun insertPoint(point: TrackPointEntity)
     @Insert suspend fun insertMarker(marker: MarkerEntity): Long
 
@@ -18,6 +19,9 @@ interface RouteDao {
 
     @Query("SELECT * FROM drives ORDER BY startedAt")
     suspend fun getAllDrives(): List<DriveEntity>
+
+    @Query("DELETE FROM drives WHERE id NOT IN (SELECT id FROM drives ORDER BY startedAt DESC LIMIT :keepCount)")
+    suspend fun pruneOldDrives(keepCount: Int = 10): Int
 
     @Query("SELECT * FROM track_points ORDER BY timestamp")
     suspend fun getAllPoints(): List<TrackPointEntity>

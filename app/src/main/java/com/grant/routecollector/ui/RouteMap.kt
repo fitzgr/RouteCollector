@@ -50,11 +50,11 @@ fun RouteMap(
         update = { map ->
             map.overlays.clear()
 
-            val targetZoom = speedSensitiveZoom(actualSpeedKph)
-            val currentZoom = map.zoomLevelDouble
-            val zoomDelta = (targetZoom - currentZoom).coerceIn(-0.35, 0.35)
-            if (kotlin.math.abs(targetZoom - currentZoom) >= 0.10) {
-                map.controller.setZoom(currentZoom + zoomDelta)
+            if (!fitRoute) {
+                val targetZoom = speedSensitiveZoom(actualSpeedKph)
+                val currentZoom = map.zoomLevelDouble
+                val zoomDelta = (targetZoom - currentZoom).coerceIn(-0.35, 0.35)
+                if (kotlin.math.abs(targetZoom - currentZoom) >= 0.10) map.controller.setZoom(currentZoom + zoomDelta)
             }
 
             if (points.isNotEmpty()) {
@@ -63,7 +63,7 @@ fun RouteMap(
             }
 
             val current = if (currentLat != null && currentLon != null) GeoPoint(currentLat, currentLon) else null
-            if (current != null) {
+            if (current != null && !fitRoute) {
                 val zoneColor = when {
                     "community" in activeZones -> Color.rgb(46,125,50)
                     "senior" in activeZones -> Color.rgb(106,76,147)
@@ -105,7 +105,7 @@ fun RouteMap(
                         map.controller.setCenter(desiredCenter)
                     }
                 }
-            } else if (points.isNotEmpty()) {
+            } else if (points.isNotEmpty() && !fitRoute) {
                 map.controller.setCenter(GeoPoint(points.last().latitude, points.last().longitude))
             }
 

@@ -33,6 +33,8 @@ fun RouteMap(
     travelBearing: Float?,
     activeZones: Set<String>,
     postedSpeed: Int?,
+    collectedSpeedActive: Boolean,
+    activeRoadAlerts: Set<String>,
     actualSpeedKph: Float?,
     fitRoute: Boolean = false,
     modifier: Modifier = Modifier
@@ -65,7 +67,8 @@ fun RouteMap(
                 val zoneColor = when {
                     "community" in activeZones -> Color.rgb(46,125,50)
                     "senior" in activeZones -> Color.rgb(106,76,147)
-                    postedSpeed != null -> Color.rgb(245,124,0)
+                    "deer" in activeRoadAlerts -> Color.rgb(255,193,7)
+                    collectedSpeedActive && postedSpeed != null -> Color.rgb(245,124,0)
                     else -> null
                 }
                 zoneColor?.let { color ->
@@ -74,7 +77,8 @@ fun RouteMap(
                         title = when {
                             "community" in activeZones -> "IN COMMUNITY ZONE"
                             "senior" in activeZones -> "IN SENIOR ZONE"
-                            else -> "IN SPEED ZONE"
+                            "deer" in activeRoadAlerts -> "IN DEER ZONE"
+                            else -> "IN COLLECTED SPEED ZONE"
                         }
                         icon = activeZoneRing(color, map.context.resources.displayMetrics.density)
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
@@ -132,7 +136,10 @@ fun RouteMap(
                         latitude = marker.latitude
                         longitude = marker.longitude
                     }
-                    bearingDifference(travelBearing, from.bearingTo(to)) <= AHEAD_BEARING_DEGREES
+                    val inForwardCone = bearingDifference(travelBearing, from.bearingTo(to)) <= AHEAD_BEARING_DEGREES
+                    val capturedBearing = Regex("bearing=(-?\\d+)").find(marker.note)?.groupValues?.getOrNull(1)?.toFloatOrNull()?.takeIf { it >= 0f }
+                    val directionMatches = capturedBearing == null || bearingDifference(travelBearing, capturedBearing) <= AHEAD_BEARING_DEGREES
+                    inForwardCone && directionMatches
                 }
             }
 

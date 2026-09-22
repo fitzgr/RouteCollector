@@ -48,12 +48,13 @@ jobs:
         run: ./gradlew assembleDebug
 
       - name: Upload Route Collector debug APK artifact
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: routecollector-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
 
       - name: Publish stable latest-debug release
         if: github.event_name != 'pull_request'

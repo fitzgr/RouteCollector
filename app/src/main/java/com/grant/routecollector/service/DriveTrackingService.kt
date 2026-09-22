@@ -132,7 +132,39 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private fun bootstrapPostedSpeedFromOsm(location: Location) { if (currentSpeedLimit != null || osmSpeedLookupInFlight || speedZoneManuallyCleared) return; val now = SystemClock.elapsedRealtime(); if (lastOsmSpeedAttemptElapsedRealtime != 0L && now - lastOsmSpeedAttemptElapsedRealtime < OSM_SPEED_RETRY_MILLIS) return; lastOsmSpeedAttemptElapsedRealtime = now; osmSpeedLookupInFlight = true; val latitude = location.latitude; val longitude = location.longitude; scope.launch { try { val result = RoadSpeedResolver.findPostedSpeed(latitude, longitude); if (result != null && currentSpeedLimit == null && driveId != null && !speedZoneManuallyCleared) { currentSpeedLimit = result.speedKph; TrackingState.currentSpeedIsCollected.value = false; TrackingState.currentPostedSpeed.value = result.speedKph; overSpeedAlertActive = false } } finally { osmSpeedLookupInFlight = false } } }
     private fun clearSpeedZone() { currentSpeedLimit = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.currentPostedSpeed.value = null; overSpeedAlertActive = false; speedZoneManuallyCleared = true; TrackingState.postDriverAlert("Posted speed cleared", kind = "zone_cleared") }
 
-    private fun checkWalkingAutoEnd(location: Location, actualSpeedKph: Float?): Boolean {\n        val speed = actualSpeedKph ?: run { walkingSinceElapsedRealtime = null; TrackingState.walkingAutoStopSeconds.value = null; return false }\n        if (speed >= DRIVING_CONFIRMED_SPEED_KPH) drivingWasConfirmed = true\n        if (!drivingWasConfirmed || !location.hasAccuracy() || location.accuracy > WALKING_MAX_ACCURACY_METRES) { walkingSinceElapsedRealtime = null; TrackingState.walkingAutoStopSeconds.value = null; return false }\n        if (speed < WALKING_MIN_SPEED_KPH || speed > WALKING_MAX_SPEED_KPH) { walkingSinceElapsedRealtime = null; TrackingState.walkingAutoStopSeconds.value = null; return false }\n        val now = SystemClock.elapsedRealtime()\n        val since = walkingSinceElapsedRealtime ?: run { walkingSinceElapsedRealtime = now; TrackingState.walkingAutoStopSeconds.value = 45; return false }\n        val remaining = ((WALKING_AUTO_END_MILLIS - (now - since)).coerceAtLeast(0L) + 999L) / 1000L\n        TrackingState.walkingAutoStopSeconds.value = remaining.toInt()\n        if (now - since < WALKING_AUTO_END_MILLIS) return false\n        TrackingState.walkingAutoStopSeconds.value = null\n        TrackingState.postDriverAlert("Walking detected. Drive saved.", kind = "walking_auto_stop")\n        stopTracking()\n        return true\n    }\n\n    private fun checkAutomaticBackup(actualSpeedKph: Float?) {
+    private fun checkWalkingAutoEnd(location: Location, actualSpeedKph: Float?): Boolean {
+        val speed = actualSpeedKph ?: run {
+            walkingSinceElapsedRealtime = null
+            TrackingState.walkingAutoStopSeconds.value = null
+            return false
+        }
+        if (speed >= DRIVING_CONFIRMED_SPEED_KPH) drivingWasConfirmed = true
+        if (!drivingWasConfirmed || !location.hasAccuracy() || location.accuracy > WALKING_MAX_ACCURACY_METRES) {
+            walkingSinceElapsedRealtime = null
+            TrackingState.walkingAutoStopSeconds.value = null
+            return false
+        }
+        if (speed < WALKING_MIN_SPEED_KPH || speed > WALKING_MAX_SPEED_KPH) {
+            walkingSinceElapsedRealtime = null
+            TrackingState.walkingAutoStopSeconds.value = null
+            return false
+        }
+        val now = SystemClock.elapsedRealtime()
+        val since = walkingSinceElapsedRealtime ?: run {
+            walkingSinceElapsedRealtime = now
+            TrackingState.walkingAutoStopSeconds.value = 45
+            return false
+        }
+        val remaining = ((WALKING_AUTO_END_MILLIS - (now - since)).coerceAtLeast(0L) + 999L) / 1000L
+        TrackingState.walkingAutoStopSeconds.value = remaining.toInt()
+        if (now - since < WALKING_AUTO_END_MILLIS) return false
+        TrackingState.walkingAutoStopSeconds.value = null
+        TrackingState.postDriverAlert("Walking detected. Drive saved.", kind = "walking_auto_stop")
+        stopTracking()
+        return true
+    }
+
+    private fun checkAutomaticBackup(actualSpeedKph: Float?) {
         val driving = actualSpeedKph != null && actualSpeedKph > NO_DRIVING_SPEED_KPH
         if (driving) { stoppedSinceElapsedRealtime = null; autoBackupDoneForCurrentStop = false; return }
         val now = SystemClock.elapsedRealtime(); val stoppedSince = stoppedSinceElapsedRealtime

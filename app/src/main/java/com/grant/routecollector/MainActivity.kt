@@ -51,6 +51,7 @@ private fun RouteCollectorScreen() {
     val drives by dao.observeDrives().collectAsStateWithLifecycle(initialValue = emptyList())
     var showHistory by remember { mutableStateOf(false) }
     var selectedHistoryDriveId by remember { mutableStateOf<Long?>(null) }
+    var cameraCaptureMessage by remember { mutableStateOf<String?>(null) }
 
     val effectiveDriveId = activeDriveId ?: selectedHistoryDriveId ?: drives.firstOrNull()?.id
     val pointsFlow = remember(effectiveDriveId) { effectiveDriveId?.let { dao.observePoints(it) } ?: flowOf(emptyList()) }
@@ -174,9 +175,9 @@ private fun RouteCollectorScreen() {
         )
     }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("Route Collector") }) }) { padding ->
+    Scaffold { padding ->
         BoxWithConstraints(
-            Modifier.padding(padding).padding(horizontal = 10.dp, vertical = 6.dp).fillMaxSize()
+            Modifier.padding(padding).padding(horizontal = 10.dp, vertical = 4.dp).fillMaxSize()
         ) {
             val mapHeight = maxHeight / 2
             Column(
@@ -187,17 +188,25 @@ private fun RouteCollectorScreen() {
             // to the remaining space and can never cover or push these controls off-screen.
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp).heightIn(max = mapHeight - 56.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Collector", style = MaterialTheme.typography.titleMedium)
-                        Row {
-                            TextButton(onClick = { showHistory = true }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("History") }
-                            TextButton(onClick = { showSettings = !showSettings }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("⚙") }
-                        }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton(onClick = { showHistory = true }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) { Text("History", style = MaterialTheme.typography.bodySmall) }
+                        Button(onClick = {
+                            if (activeDriveId == null) scope.launch {
+                                val id = dao.insertDrive(DriveEntity(startedAt = System.currentTimeMillis()))
+                                dao.pruneOldDrives(10); selectedHistoryDriveId = null
+                                ContextCompat.startForegroundService(context, Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_START; putExtra(DriveTrackingService.EXTRA_DRIVE_ID, id) })
+                            } else {
+                                context.startService(Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_STOP })
+                                context.stopService(Intent(context, CollectorOverlayService::class.java)); context.stopService(Intent(context, RouteMarkerMapOverlayService::class.java))
+                            }
+                        }, modifier = Modifier.weight(1f).height(40.dp), colors = ButtonDefaults.buttonColors(containerColor = if (activeDriveId == null) Color(0xFFDDEEDD) else Color(0xFFF4C7C3), contentColor = Color(0xFF263238)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text(if (activeDriveId == null) "▶  Start" else "■  Stop") }
+                        TextButton(onClick = { showSettings = !showSettings }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("⚙") }
                     }
                     Text(
                         "${if (collectedSpeed) "Collected" else "Posted"} ${postedSpeed?.let { "$it km/h" } ?: "--"}   Actual ${actualSpeed?.let { "${it.toInt()} km/h" } ?: "--"}",
                         style = MaterialTheme.typography.bodyLarge
                     )
+                    cameraCaptureMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF2E7D32)) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {
                             val driveId = activeDriveId
@@ -205,7 +214,8 @@ private fun RouteCollectorScreen() {
                                 dao.latestPoint(driveId)?.let { point ->
                                     val snap = IntersectionSnapper.findNearestIntersection(point.latitude, point.longitude)
                                     saveBoundaryMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = snap?.latitude ?: point.latitude, longitude = snap?.longitude ?: point.longitude, kind = "red_light_camera", note = snap?.let { "Red light camera — ${it.intersectionName}; observed ${point.latitude},${point.longitude}" } ?: "Red light camera — intersection not confirmed; observed ${point.latitude},${point.longitude}"))
-                                    speakPrompt(if (snap != null) "Red light camera snapped to ${snap.intersectionName}" else "Red light camera marked")
+                                    cameraCaptureMessage = if (snap != null) "✓ Camera marked • ${snap.intersectionName}" else "✓ Camera marked"
+                                    speakPrompt(if (snap != null) "Marked camera at ${snap.intersectionName}" else "Red light camera marked")
                                 }
                             }
                         }, enabled = activeDriveId != null, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = if ("camera" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFF1F3F4), contentColor = Color(0xFF263238))) { Text("🚦📷", style = MaterialTheme.typography.titleLarge) }
@@ -442,25 +452,6 @@ private fun RouteCollectorScreen() {
                 }
             }
 
-            Button(onClick = {
-                if (activeDriveId == null) {
-                    scope.launch {
-                        val id = dao.insertDrive(DriveEntity(startedAt = System.currentTimeMillis()))
-                        dao.pruneOldDrives(10)
-                        selectedHistoryDriveId = null
-                        ContextCompat.startForegroundService(context, Intent(context, DriveTrackingService::class.java).apply {
-                            action = DriveTrackingService.ACTION_START
-                            putExtra(DriveTrackingService.EXTRA_DRIVE_ID, id)
-                        })
-                    }
-                } else {
-                    context.startService(Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_STOP })
-                    context.stopService(Intent(context, CollectorOverlayService::class.java))
-                    context.stopService(Intent(context, RouteMarkerMapOverlayService::class.java))
-                }
-            }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = if (activeDriveId == null) MaterialTheme.colorScheme.primary else Color(0xFFDDEEDD), contentColor = if (activeDriveId == null) MaterialTheme.colorScheme.onPrimary else Color(0xFF263238))) {
-                Text(if (activeDriveId == null) "Start drive" else "Stop drive")
-            }
 
                 Spacer(Modifier.weight(1f))
                 HorizontalDivider()

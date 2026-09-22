@@ -75,6 +75,7 @@ private fun RouteCollectorScreen() {
     val activeZones by TrackingState.activeZoneKinds.collectAsStateWithLifecycle()
     val activeRoadAlerts by TrackingState.activeRoadAlerts.collectAsStateWithLifecycle()
     val overSpeedActive by TrackingState.overSpeedActive.collectAsStateWithLifecycle()
+    val walkingCountdown by TrackingState.walkingAutoStopSeconds.collectAsStateWithLifecycle()
     val driverAlert by TrackingState.driverAlert.collectAsStateWithLifecycle()
     val travelBearing by TrackingState.latestBearingDegrees.collectAsStateWithLifecycle()
     val latestLat by TrackingState.latestLat.collectAsStateWithLifecycle()
@@ -197,6 +198,7 @@ private fun RouteCollectorScreen() {
                                 ContextCompat.startForegroundService(context, Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_START; putExtra(DriveTrackingService.EXTRA_DRIVE_ID, id) })
                             } else {
                                 context.startService(Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_STOP })
+                                TrackingState.postDriverAlert("Drive saved", kind = "drive_saved")
                                 context.stopService(Intent(context, CollectorOverlayService::class.java)); context.stopService(Intent(context, RouteMarkerMapOverlayService::class.java))
                             }
                         }, modifier = Modifier.weight(1f).height(40.dp), colors = ButtonDefaults.buttonColors(containerColor = if (activeDriveId == null) Color(0xFFDDEEDD) else Color(0xFFF4C7C3), contentColor = Color(0xFF263238)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text(if (activeDriveId == null) "▶  Start" else "■  Stop") }
@@ -206,6 +208,7 @@ private fun RouteCollectorScreen() {
                         "${if (collectedSpeed) "Collected" else "Posted"} ${postedSpeed?.let { "$it km/h" } ?: "--"}   Actual ${actualSpeed?.let { "${it.toInt()} km/h" } ?: "--"}",
                         style = MaterialTheme.typography.bodyLarge
                     )
+                    walkingCountdown?.let { Text("Walking detected • ending drive in ${it}s", style = MaterialTheme.typography.bodySmall, color = Color(0xFFB26A00)) }
                     cameraCaptureMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF2E7D32)) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {
@@ -215,6 +218,7 @@ private fun RouteCollectorScreen() {
                                     val snap = IntersectionSnapper.findNearestIntersection(point.latitude, point.longitude)
                                     saveBoundaryMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = snap?.latitude ?: point.latitude, longitude = snap?.longitude ?: point.longitude, kind = "red_light_camera", note = snap?.let { "Red light camera — ${it.intersectionName}; observed ${point.latitude},${point.longitude}" } ?: "Red light camera — intersection not confirmed; observed ${point.latitude},${point.longitude}"))
                                     cameraCaptureMessage = if (snap != null) "✓ Camera marked • ${snap.intersectionName}" else "✓ Camera marked"
+                                    scope.launch { kotlinx.coroutines.delay(4000); cameraCaptureMessage = null }
                                     speakPrompt(if (snap != null) "Marked camera at ${snap.intersectionName}" else "Red light camera marked")
                                 }
                             }

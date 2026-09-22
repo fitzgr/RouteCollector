@@ -33,6 +33,8 @@ import com.grant.routecollector.ui.RouteMap
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import java.util.UUID
+import java.text.DateFormat
+import java.util.Date
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,6 +54,7 @@ private fun RouteCollectorScreen() {
     var showHistory by remember { mutableStateOf(false) }
     var selectedHistoryDriveId by remember { mutableStateOf<Long?>(null) }
     var cameraCaptureMessage by remember { mutableStateOf<String?>(null) }
+    var cameraCaptureBusy by remember { mutableStateOf(false) }
 
     val effectiveDriveId = activeDriveId ?: selectedHistoryDriveId ?: drives.firstOrNull()?.id
     val pointsFlow = remember(effectiveDriveId) { effectiveDriveId?.let { dao.observePoints(it) } ?: flowOf(emptyList()) }
@@ -165,8 +168,14 @@ private fun RouteCollectorScreen() {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     drives.take(10).forEach { drive ->
+                        val markerCount = if (drive.id == effectiveDriveId) markers.size else null
+                        val elapsed = ((drive.endedAt ?: System.currentTimeMillis()) - drive.startedAt).coerceAtLeast(0L)
+                        val minutes = elapsed / 60_000L
                         TextButton(onClick = { selectedHistoryDriveId = drive.id; showHistory = false }, modifier = Modifier.fillMaxWidth()) {
-                            Text("Drive #${drive.id} • ${if (drive.endedAt == null) "recording" else "saved"}")
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(drive.startedAt)))
+                                Text("${if (drive.endedAt == null) "Recording" else "Saved"} • ${minutes} min" + (markerCount?.let { " • $it markers" } ?: ""), style = MaterialTheme.typography.bodySmall)
+                            }
                         }
                     }
                     if (drives.isEmpty()) Text("No recorded drives yet")
@@ -210,7 +219,9 @@ private fun RouteCollectorScreen() {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {
                             val driveId = activeDriveId
-                            if (driveId != null) scope.launch {
+                            if (driveId != null && !cameraCaptureBusy) {
+                                cameraCaptureBusy = true
+                                scope.launch {
                                 dao.latestPoint(driveId)?.let { point ->
                                     val snap = IntersectionSnapper.findNearestIntersection(point.latitude, point.longitude)
                                     saveBoundaryMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = snap?.latitude ?: point.latitude, longitude = snap?.longitude ?: point.longitude, kind = "red_light_camera", note = snap?.let { "Red light camera — ${it.intersectionName}; observed ${point.latitude},${point.longitude}" } ?: "Red light camera — intersection not confirmed; observed ${point.latitude},${point.longitude}"))
@@ -218,8 +229,11 @@ private fun RouteCollectorScreen() {
                                     scope.launch { kotlinx.coroutines.delay(4000); cameraCaptureMessage = null }
                                     speakPrompt(if (snap != null) "Marked camera at ${snap.intersectionName}" else "Red light camera marked")
                                 }
+                                kotlinx.coroutines.delay(750)
+                                cameraCaptureBusy = false
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("camera" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFF1F3F4), contentColor = Color(0xFF263238))) { Text("🚦📷", style = MaterialTheme.typography.titleLarge) }
+                            }
+                        }, enabled = activeDriveId != null && !cameraCaptureBusy, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("camera" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Text("🚦📷", style = MaterialTheme.typography.titleLarge) }
                         Button(onClick = {
                             val driveId = activeDriveId
                             if (driveId != null) scope.launch {
@@ -240,7 +254,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (paired) "Deer zone captured" else "Deer zone marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("deer" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFF1F3F4), contentColor = Color(0xFF263238))) { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { Text("🦌", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF263238)); Box(Modifier.size(34.dp)) { Text("◆", style = MaterialTheme.typography.headlineMedium, color = Color(0xFF111111)); Text("◆", style = MaterialTheme.typography.headlineSmall, color = Color(0xFFFFD600), modifier = Modifier.padding(3.dp)) } } }
+                        }, enabled = activeDriveId != null, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("deer" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { Text("🦌", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF263238)); Box(Modifier.size(34.dp)) { Text("◆", style = MaterialTheme.typography.headlineMedium, color = Color(0xFF111111)); Text("◆", style = MaterialTheme.typography.headlineSmall, color = Color(0xFFFFD600), modifier = Modifier.padding(3.dp)) } } }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {

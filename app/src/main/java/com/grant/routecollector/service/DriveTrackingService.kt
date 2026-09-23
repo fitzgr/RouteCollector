@@ -49,7 +49,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val NO_DRIVING_SPEED_KPH = 5f
         private const val WALKING_MAX_SPEED_KPH = 7f
         private const val WALKING_MIN_SPEED_KPH = 1f
-        private const val WALKING_AUTO_END_MILLIS = 30_000L
+        private const val WALKING_AUTO_END_MILLIS = 10 * 60 * 1000L
         private const val DRIVING_CONFIRMED_SPEED_KPH = 15f
         private const val WALKING_MAX_ACCURACY_METRES = 20f
         private const val AUTO_BACKUP_STOPPED_MILLIS = 10 * 60 * 1000L

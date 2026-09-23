@@ -173,8 +173,12 @@ private fun RouteCollectorScreen() {
                         val minutes = elapsed / 60_000L
                         TextButton(onClick = { selectedHistoryDriveId = drive.id; showHistory = false }, modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.fillMaxWidth()) {
-                                Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(drive.startedAt)))
-                                Text("${if (drive.endedAt == null) "Recording" else "Saved"} • ${minutes} min" + (markerCount?.let { " • $it markers" } ?: ""), style = MaterialTheme.typography.bodySmall)
+                                val dateText = DateFormat.getDateInstance(DateFormat.SHORT).format(Date(drive.startedAt))
+                                val timeFormat = DateFormat.getTimeInstance(DateFormat.SHORT)
+                                val startText = timeFormat.format(Date(drive.startedAt))
+                                val endText = drive.endedAt?.let { timeFormat.format(Date(it)) } ?: "Recording"
+                                Text("$dateText  $startText – $endText")
+                                Text("${minutes} min" + (markerCount?.let { " • $it markers" } ?: ""), style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }
@@ -195,7 +199,7 @@ private fun RouteCollectorScreen() {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Collector", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        Text("Route Collector", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                         Button(onClick = {
                             if (activeDriveId == null) scope.launch {
                                 val id = dao.insertDrive(DriveEntity(startedAt = System.currentTimeMillis()))
@@ -207,7 +211,7 @@ private fun RouteCollectorScreen() {
                                 context.stopService(Intent(context, CollectorOverlayService::class.java)); context.stopService(Intent(context, RouteMarkerMapOverlayService::class.java))
                             }
                         }, modifier = Modifier.height(34.dp), colors = ButtonDefaults.buttonColors(containerColor = if (activeDriveId == null) Color(0xFFDDEEDD) else Color(0xFFF4C7C3), contentColor = Color(0xFF263238)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text(if (activeDriveId == null) "▶ Start" else "■ Stop", style = MaterialTheme.typography.bodySmall) }
-                        TextButton(onClick = { showHistory = true }, modifier = Modifier.height(34.dp), contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp)) { Text("History", style = MaterialTheme.typography.bodySmall) }
+                        Button(onClick = { showHistory = true }, modifier = Modifier.height(34.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE0E0E0), contentColor = Color(0xFF37474F)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("History", style = MaterialTheme.typography.bodySmall) }
                         TextButton(onClick = { showSettings = !showSettings }, modifier = Modifier.height(34.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) { Text("⚙") }
                     }
                     Text(

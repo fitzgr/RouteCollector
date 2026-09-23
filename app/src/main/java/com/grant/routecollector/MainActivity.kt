@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Looper
+import android.location.Location
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -19,6 +21,11 @@ import androidx.compose.ui.graphics.Color
 import android.media.AudioManager
 import android.media.ToneGenerator
 import com.grant.routecollector.map.IntersectionSnapper
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.ui.platform.LocalContext
@@ -62,6 +69,8 @@ private fun RouteCollectorScreen() {
     val points by pointsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val markers by markersFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+    var autoStartFixes by remember { mutableIntStateOf(0) }
+    var autoStartLastLocation by remember { mutableStateOf<Location?>(null) }
     val postedSpeed by TrackingState.currentPostedSpeed.collectAsStateWithLifecycle()
     val actualSpeed by TrackingState.latestSpeedKph.collectAsStateWithLifecycle()
     val collectedSpeed by TrackingState.currentSpeedIsCollected.collectAsStateWithLifecycle()
@@ -153,6 +162,56 @@ private fun RouteCollectorScreen() {
         }
     }
 
+    DisposableEffect(activeDriveId) {
+        if (activeDriveId != null || ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            onDispose { }
+        } else {
+            val client = LocationServices.getFusedLocationProviderClient(context)
+            val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2_000L)
+                .setMinUpdateIntervalMillis(1_000L)
+                .setMinUpdateDistanceMeters(5f)
+                .build()
+            val callback = object : LocationCallback() {
+                override fun onLocationResult(result: LocationResult) {
+                    result.locations.forEach { location ->
+                        if (!location.hasAccuracy() || location.accuracy > 25f) {
+                            autoStartFixes = 0
+                            autoStartLastLocation = Location(location)
+                            return@forEach
+                        }
+                        val speedKph = if (location.hasSpeed()) location.speed * 3.6f else {
+                            val previous = autoStartLastLocation
+                            if (previous != null && location.time > previous.time) {
+                                previous.distanceTo(location) / ((location.time - previous.time) / 1000f) * 3.6f
+                            } else 0f
+                        }
+                        autoStartLastLocation = Location(location)
+                        autoStartFixes = if (speedKph >= 15f) autoStartFixes + 1 else 0
+                        if (autoStartFixes >= 3 && TrackingState.activeDriveId.value == null) {
+                            autoStartFixes = 0
+                            scope.launch {
+                                val id = dao.insertDrive(DriveEntity(startedAt = System.currentTimeMillis()))
+                                dao.pruneOldDrives(10)
+                                selectedHistoryDriveId = null
+                                ContextCompat.startForegroundService(context, Intent(context, DriveTrackingService::class.java).apply {
+                                    action = DriveTrackingService.ACTION_START
+                                    putExtra(DriveTrackingService.EXTRA_DRIVE_ID, id)
+                                })
+                                TrackingState.postDriverAlert("Driving mode automatically started", kind = "auto_start")
+                                context.startService(Intent(context, DriveTrackingService::class.java).apply {
+                                    action = DriveTrackingService.ACTION_SPEAK
+                                    putExtra(DriveTrackingService.EXTRA_SPEAK_TEXT, "Driving mode automatically started")
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+            client.requestLocationUpdates(request, callback, Looper.getMainLooper())
+            onDispose { client.removeLocationUpdates(callback) }
+        }
+    }
+
     LaunchedEffect(Unit) {
         val wanted = buildList {
             add(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -218,7 +277,7 @@ private fun RouteCollectorScreen() {
                         "${if (collectedSpeed) "Collected" else "Posted"} ${postedSpeed?.let { "$it km/h" } ?: "--"}   Actual ${actualSpeed?.let { "${it.toInt()} km/h" } ?: "--"}",
                         style = MaterialTheme.typography.bodyLarge
                     )
-                    walkingCountdown?.let { Text("Walking detected • ending drive in ${it}s", style = MaterialTheme.typography.bodySmall, color = Color(0xFFB26A00)) }
+                    walkingCountdown?.let { Text("No GPS movement • auto-stop in ${it}s", style = MaterialTheme.typography.bodySmall, color = Color(0xFFB26A00)) }
                     cameraCaptureMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF2E7D32)) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {

@@ -47,12 +47,10 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val PREF_CAMERA_WARNING_METRES = "red_light_camera_warning_metres"
         private const val PREF_SPEED_TOLERANCE_PREFIX = "speed_tolerance_"
         private const val NO_DRIVING_SPEED_KPH = 5f
-        private const val WALKING_MAX_SPEED_KPH = 7f
-        private const val WALKING_MIN_SPEED_KPH = 1f
-        private const val WALKING_AUTO_END_MILLIS = 10 * 60 * 1000L
         private const val DRIVING_CONFIRMED_SPEED_KPH = 15f
-        private const val WALKING_MAX_ACCURACY_METRES = 20f
-        private const val AUTO_BACKUP_STOPPED_MILLIS = 10 * 60 * 1000L
+        private const val AUTO_END_NO_MOVEMENT_MILLIS = 10 * 60 * 1000L
+        private const val AUTO_END_MOVEMENT_METRES = 25f
+        private const val AUTO_END_MAX_ACCURACY_METRES = 25f
         private const val SAME_DIRECTION_TOLERANCE_DEGREES = 60f
         private const val REVERSE_DIRECTION_MIN_DEGREES = 120f
         private const val OSM_SPEED_RETRY_MILLIS = 30_000L
@@ -81,10 +79,9 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private val markerBearingCache = mutableMapOf<Long, Float?>()
     private var currentSpeedLimit: Int? = null
     private var overSpeedAlertActive = false
-    private var stoppedSinceElapsedRealtime: Long? = null
-    private var walkingSinceElapsedRealtime: Long? = null
+    private var noMovementSinceElapsedRealtime: Long? = null
+    private var noMovementAnchor: Location? = null
     private var drivingWasConfirmed = false
-    private var autoBackupDoneForCurrentStop = false
     private var previousLocationForBearing: Location? = null
     private var currentTravelBearing: Float? = null
     private var lastOsmSpeedAttemptElapsedRealtime = 0L
@@ -101,7 +98,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             for (location in result.locations) {
                 TrackingState.latestLat.value = location.latitude; TrackingState.latestLon.value = location.longitude
                 val actualSpeedKph = if (location.hasSpeed()) location.speed * 3.6f else null
-                TrackingState.latestSpeedKph.value = actualSpeedKph; updateTravelBearing(location, actualSpeedKph); clearSafetyZonesAfterTurn(); bootstrapPostedSpeedFromOsm(location); checkOverSpeedThreshold(actualSpeedKph); if (checkWalkingAutoEnd(location, actualSpeedKph)) return; checkAutomaticBackup(actualSpeedKph)
+                TrackingState.latestSpeedKph.value = actualSpeedKph; updateTravelBearing(location, actualSpeedKph); clearSafetyZonesAfterTurn(); bootstrapPostedSpeedFromOsm(location); checkOverSpeedThreshold(actualSpeedKph); if (checkNoMovementAutoEnd(location, actualSpeedKph)) return
                 scope.launch { dao.insertPoint(TrackPointEntity(driveId = id, timestamp = location.time, latitude = location.latitude, longitude = location.longitude, accuracyMetres = location.accuracy, speedMps = if (location.hasSpeed()) location.speed else null)); announceNearbyRoadFacts(location) }
             }
         }
@@ -116,7 +113,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
                 driveId = intent.getLongExtra(EXTRA_DRIVE_ID, -1L).takeIf { it > 0 }
                 driveId?.let {
                     warnedReductionMarkerIds.clear(); announcedMarkerIds.clear(); warnedCameraMarkerIds.clear(); verifiedCameraMarkerIds.clear(); camerasCurrentlyInRange.clear(); passiveReverseMarkerIds.clear(); previousMarkerDistances.clear(); markerBearingCache.clear()
-                    previousLocationForBearing = null; currentTravelBearing = null; currentSpeedLimit = null; overSpeedAlertActive = false; stoppedSinceElapsedRealtime = null; walkingSinceElapsedRealtime = null; drivingWasConfirmed = false; autoBackupDoneForCurrentStop = false; lastOsmSpeedAttemptElapsedRealtime = 0L; osmSpeedLookupInFlight = false; speedZoneManuallyCleared = false
+                    previousLocationForBearing = null; currentTravelBearing = null; currentSpeedLimit = null; overSpeedAlertActive = false; noMovementSinceElapsedRealtime = null; noMovementAnchor = null; drivingWasConfirmed = false; lastOsmSpeedAttemptElapsedRealtime = 0L; osmSpeedLookupInFlight = false; speedZoneManuallyCleared = false
                     TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); TrackingState.currentSpeedIsCollected.value = false; TrackingState.activeDriveId.value = it
                     startForeground(NOTIFICATION_ID, buildNotification()); beginUpdates()
                 }
@@ -133,46 +130,42 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private fun bootstrapPostedSpeedFromOsm(location: Location) { if (currentSpeedLimit != null || osmSpeedLookupInFlight || speedZoneManuallyCleared) return; val now = SystemClock.elapsedRealtime(); if (lastOsmSpeedAttemptElapsedRealtime != 0L && now - lastOsmSpeedAttemptElapsedRealtime < OSM_SPEED_RETRY_MILLIS) return; lastOsmSpeedAttemptElapsedRealtime = now; osmSpeedLookupInFlight = true; val latitude = location.latitude; val longitude = location.longitude; scope.launch { try { val result = RoadSpeedResolver.findPostedSpeed(latitude, longitude); if (result != null && currentSpeedLimit == null && driveId != null && !speedZoneManuallyCleared) { currentSpeedLimit = result.speedKph; TrackingState.currentSpeedIsCollected.value = false; TrackingState.currentPostedSpeed.value = result.speedKph; overSpeedAlertActive = false } } finally { osmSpeedLookupInFlight = false } } }
     private fun clearSpeedZone() { currentSpeedLimit = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.currentPostedSpeed.value = null; overSpeedAlertActive = false; speedZoneManuallyCleared = true; TrackingState.postDriverAlert("Posted speed cleared", kind = "zone_cleared") }
 
-    private fun checkWalkingAutoEnd(location: Location, actualSpeedKph: Float?): Boolean {
-        val speed = actualSpeedKph ?: run {
-            walkingSinceElapsedRealtime = null
+    private fun checkNoMovementAutoEnd(location: Location, actualSpeedKph: Float?): Boolean {
+        if (actualSpeedKph != null && actualSpeedKph >= DRIVING_CONFIRMED_SPEED_KPH) drivingWasConfirmed = true
+        if (!drivingWasConfirmed || !location.hasAccuracy() || location.accuracy > AUTO_END_MAX_ACCURACY_METRES) {
+            noMovementSinceElapsedRealtime = null
+            noMovementAnchor = null
             TrackingState.walkingAutoStopSeconds.value = null
             return false
         }
-        if (speed >= DRIVING_CONFIRMED_SPEED_KPH) drivingWasConfirmed = true
-        if (!drivingWasConfirmed || !location.hasAccuracy() || location.accuracy > WALKING_MAX_ACCURACY_METRES) {
-            walkingSinceElapsedRealtime = null
-            TrackingState.walkingAutoStopSeconds.value = null
+
+        val anchor = noMovementAnchor
+        if (anchor == null) {
+            noMovementAnchor = Location(location)
+            noMovementSinceElapsedRealtime = SystemClock.elapsedRealtime()
+            TrackingState.walkingAutoStopSeconds.value = (AUTO_END_NO_MOVEMENT_MILLIS / 1000L).toInt()
             return false
         }
-        if (speed < WALKING_MIN_SPEED_KPH || speed > WALKING_MAX_SPEED_KPH) {
-            walkingSinceElapsedRealtime = null
-            TrackingState.walkingAutoStopSeconds.value = null
+
+        if (anchor.distanceTo(location) >= AUTO_END_MOVEMENT_METRES) {
+            noMovementAnchor = Location(location)
+            noMovementSinceElapsedRealtime = SystemClock.elapsedRealtime()
+            TrackingState.walkingAutoStopSeconds.value = (AUTO_END_NO_MOVEMENT_MILLIS / 1000L).toInt()
             return false
         }
-        val now = SystemClock.elapsedRealtime()
-        val since = walkingSinceElapsedRealtime ?: run {
-            walkingSinceElapsedRealtime = now
-            TrackingState.walkingAutoStopSeconds.value = (WALKING_AUTO_END_MILLIS / 1000L).toInt()
-            return false
-        }
-        val remaining = ((WALKING_AUTO_END_MILLIS - (now - since)).coerceAtLeast(0L) + 999L) / 1000L
+
+        val since = noMovementSinceElapsedRealtime ?: SystemClock.elapsedRealtime().also { noMovementSinceElapsedRealtime = it }
+        val elapsed = SystemClock.elapsedRealtime() - since
+        val remaining = ((AUTO_END_NO_MOVEMENT_MILLIS - elapsed).coerceAtLeast(0L) + 999L) / 1000L
         TrackingState.walkingAutoStopSeconds.value = remaining.toInt()
-        if (now - since < WALKING_AUTO_END_MILLIS) return false
+        if (elapsed < AUTO_END_NO_MOVEMENT_MILLIS) return false
+
         TrackingState.walkingAutoStopSeconds.value = null
-        TrackingState.postDriverAlert("Walking detected. Drive saved.", kind = "walking_auto_stop")
+        speak("Driving mode automatically stopped. Drive saved.")
         stopTracking()
         return true
     }
 
-    private fun checkAutomaticBackup(actualSpeedKph: Float?) {
-        val driving = actualSpeedKph != null && actualSpeedKph > NO_DRIVING_SPEED_KPH
-        if (driving) { stoppedSinceElapsedRealtime = null; autoBackupDoneForCurrentStop = false; return }
-        val now = SystemClock.elapsedRealtime(); val stoppedSince = stoppedSinceElapsedRealtime
-        if (stoppedSince == null) { stoppedSinceElapsedRealtime = now; return }; if (autoBackupDoneForCurrentStop || now - stoppedSince < AUTO_BACKUP_STOPPED_MILLIS) return; autoBackupDoneForCurrentStop = true
-        scope.launch { try { val id = driveId ?: return@launch; dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) }; val fileName = RouteDataExporter.exportToDownloads(this@DriveTrackingService, dao, automatic = true); TrackingState.postDriverAlert("Route backed up and drive ended after 10 minutes stopped: $fileName", kind = "auto_backup"); finishAfterAutomaticBackup() } catch (_: Exception) { autoBackupDoneForCurrentStop = false; TrackingState.postDriverAlert("Automatic route data backup failed", kind = "auto_backup_error") } }
-    }
-    private fun finishAfterAutomaticBackup() { client.removeLocationUpdates(callback); driveId = null; currentSpeedLimit = null; overSpeedAlertActive = false; stoppedSinceElapsedRealtime = null; previousMarkerDistances.clear(); markerBearingCache.clear(); activeZoneEntryBearings.clear(); TrackingState.activeDriveId.value = null; TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); TrackingState.activeRoadAlerts.value = emptySet(); TrackingState.overSpeedActive.value = false; stopService(Intent(this, CollectorOverlayService::class.java)); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     private fun defaultTolerance(speed: Int): Int = if (speed >= 100) 9 else 8
     private fun getSpeedTolerance(speed: Int): Int = getSharedPreferences(PREFS, MODE_PRIVATE).getInt("$PREF_SPEED_TOLERANCE_PREFIX$speed", defaultTolerance(speed))
     private fun checkOverSpeedThreshold(actualSpeedKph: Float?) {
@@ -295,7 +288,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PLAY))
         }
     }
-    private fun stopTracking() { client.removeLocationUpdates(callback); val id = driveId; if (id != null) scope.launch { dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) } }; driveId = null; currentSpeedLimit = null; overSpeedAlertActive = false; stoppedSinceElapsedRealtime = null; autoBackupDoneForCurrentStop = false; previousMarkerDistances.clear(); markerBearingCache.clear(); TrackingState.activeDriveId.value = null; TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); TrackingState.activeRoadAlerts.value = emptySet(); TrackingState.overSpeedActive.value = false; TrackingState.walkingAutoStopSeconds.value = null; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+    private fun stopTracking() { client.removeLocationUpdates(callback); val id = driveId; if (id != null) scope.launch { dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) } }; driveId = null; currentSpeedLimit = null; overSpeedAlertActive = false; noMovementSinceElapsedRealtime = null; noMovementAnchor = null; previousMarkerDistances.clear(); markerBearingCache.clear(); TrackingState.activeDriveId.value = null; TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); TrackingState.activeRoadAlerts.value = emptySet(); TrackingState.overSpeedActive.value = false; TrackingState.walkingAutoStopSeconds.value = null; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     private fun createChannel() { getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL_ID, "Drive tracking", NotificationManager.IMPORTANCE_LOW)) }
     private fun buildNotification() = NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(android.R.drawable.ic_menu_mylocation).setContentTitle("Route Collector is recording").setContentText("GPS recording and route alerts are active").setOngoing(true).setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
     override fun onDestroy() { client.removeLocationUpdates(callback); mainHandler.removeCallbacksAndMessages(null); tts?.stop(); tts?.shutdown(); scope.cancel(); super.onDestroy() }

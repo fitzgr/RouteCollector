@@ -54,6 +54,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val SAME_DIRECTION_TOLERANCE_DEGREES = 60f
         private const val REVERSE_DIRECTION_MIN_DEGREES = 120f
         private const val OSM_SPEED_RETRY_MILLIS = 30_000L
+        private const val OSM_SPEED_MOVING_REFRESH_MILLIS = 30_000L
         private const val SPEED_RECOVERY_HYSTERESIS_KPH = 2f
         private const val ZONE_TURN_EXIT_DEGREES = 65f
         private const val DEER_PAIR_MAX_METRES = 20_000f
@@ -127,7 +128,34 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
 
     private fun beginUpdates() { if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) { stopSelf(); return }; val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2_000L).setMinUpdateDistanceMeters(5f).setMinUpdateIntervalMillis(1_000L).build(); client.requestLocationUpdates(request, callback, mainLooper) }
     private fun updateTravelBearing(location: Location, actualSpeedKph: Float?) { if (actualSpeedKph != null && actualSpeedKph > NO_DRIVING_SPEED_KPH) { currentTravelBearing = when { location.hasBearing() -> normalizeBearing(location.bearing); previousLocationForBearing != null -> normalizeBearing(previousLocationForBearing!!.bearingTo(location)); else -> currentTravelBearing }; TrackingState.latestBearingDegrees.value = currentTravelBearing }; previousLocationForBearing = Location(location) }
-    private fun bootstrapPostedSpeedFromOsm(location: Location) { if (currentSpeedLimit != null || osmSpeedLookupInFlight || speedZoneManuallyCleared) return; val now = SystemClock.elapsedRealtime(); if (lastOsmSpeedAttemptElapsedRealtime != 0L && now - lastOsmSpeedAttemptElapsedRealtime < OSM_SPEED_RETRY_MILLIS) return; lastOsmSpeedAttemptElapsedRealtime = now; osmSpeedLookupInFlight = true; val latitude = location.latitude; val longitude = location.longitude; scope.launch { try { val result = RoadSpeedResolver.findPostedSpeed(latitude, longitude); if (result != null && currentSpeedLimit == null && driveId != null && !speedZoneManuallyCleared) { currentSpeedLimit = result.speedKph; TrackingState.currentSpeedIsCollected.value = false; TrackingState.currentPostedSpeed.value = result.speedKph; overSpeedAlertActive = false } } finally { osmSpeedLookupInFlight = false } } }
+    private fun bootstrapPostedSpeedFromOsm(location: Location) {
+        val moving = location.hasSpeed() && location.speed > 0f
+        if (osmSpeedLookupInFlight || speedZoneManuallyCleared) return
+        if (currentSpeedLimit != null && !moving) return
+        val now = SystemClock.elapsedRealtime()
+        val refreshMillis = if (moving) OSM_SPEED_MOVING_REFRESH_MILLIS else OSM_SPEED_RETRY_MILLIS
+        if (lastOsmSpeedAttemptElapsedRealtime != 0L && now - lastOsmSpeedAttemptElapsedRealtime < refreshMillis) return
+        lastOsmSpeedAttemptElapsedRealtime = now
+        osmSpeedLookupInFlight = true
+        val latitude = location.latitude
+        val longitude = location.longitude
+        scope.launch {
+            try {
+                val result = RoadSpeedResolver.findPostedSpeed(latitude, longitude)
+                if (result != null && driveId != null && !speedZoneManuallyCleared) {
+                    val collected = TrackingState.currentSpeedIsCollected.value
+                    if (!collected || currentSpeedLimit == null) {
+                        currentSpeedLimit = result.speedKph
+                        TrackingState.currentSpeedIsCollected.value = false
+                        TrackingState.currentPostedSpeed.value = result.speedKph
+                        overSpeedAlertActive = false
+                    }
+                }
+            } finally {
+                osmSpeedLookupInFlight = false
+            }
+        }
+    }
     private fun clearSpeedZone() { currentSpeedLimit = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.currentPostedSpeed.value = null; overSpeedAlertActive = false; speedZoneManuallyCleared = true; TrackingState.postDriverAlert("Posted speed cleared", kind = "zone_cleared") }
 
     private fun checkNoMovementAutoEnd(location: Location, actualSpeedKph: Float?): Boolean {

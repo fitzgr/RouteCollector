@@ -62,15 +62,13 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun UiMapPin(symbol: String, pinColor: Color, symbolSize: Int) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy((-5).dp)) {
-        Box(
-            modifier = Modifier.size(30.dp).shadow(2.dp, CircleShape).background(pinColor, CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(symbol, fontSize = symbolSize.sp, color = Color.Black)
-        }
-        Text("▼", fontSize = 15.sp, color = pinColor)
+private fun CollectorMarkerButton(symbol: String, symbolSize: Int, markerColor: Color) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Text(symbol, fontSize = symbolSize.sp, color = Color.Black)
+        Text("📍", fontSize = 18.sp, color = markerColor)
     }
 }
 
@@ -324,7 +322,7 @@ private fun RouteCollectorScreen() {
                                 cameraCaptureBusy = false
                             }
                             }
-                        }, enabled = activeDriveId != null && !cameraCaptureBusy, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("camera" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { UiMapPin(symbol = "📷", pinColor = Color(0xFFD32F2F), symbolSize = 15) }
+                        }, enabled = activeDriveId != null && !cameraCaptureBusy, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("camera" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { CollectorMarkerButton(symbol = "📷", symbolSize = 27, markerColor = Color(0xFFD32F2F)) }
                         Button(onClick = {
                             val driveId = activeDriveId
                             if (driveId != null) scope.launch {
@@ -354,7 +352,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt("Pedestrian crossing marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { UiMapPin(symbol = "🚸", pinColor = Color(0xFFFFC107), symbolSize = 19) }
+                        }, enabled = activeDriveId != null, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { CollectorMarkerButton(symbol = "🚸", symbolSize = 27, markerColor = Color(0xFFFFC107)) }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {

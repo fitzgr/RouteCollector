@@ -28,7 +28,7 @@ The compact overlay is designed for road testing and currently provides:
 
 ## Speed-zone collection and alerts
 
-The **Speed** panel supports posted speeds of 40, 50, 60, 70, 80, 90, 100, and 110 km/h. Opening **Speed** preselects the current Posted/Collected speed (fallback 60 km/h) and resets the marker type to **Zone begins**. The selected speed remains visible while the panel is open. A tester records either:
+The **Speed** panel supports posted speeds of 30, 40, 50, 60, 70, 80, 90, 100, and 110 km/h. Opening **Speed** preselects the current Posted/Collected speed (fallback 60 km/h) and resets the marker type to **Zone begins**. The selected speed remains visible while the panel is open. A tester records either:
 
 - **Zone begins** — the actual boundary where the new posted limit starts; or
 - **Advance sign** — the earlier sign warning that a different limit is coming.
@@ -255,3 +255,19 @@ Current work is focused on making road-fact collection and playback reliable eno
 ## Safety
 
 Do not interact with the phone while driving. The overlay, spoken acknowledgements, and passive alerts are intended to minimize interaction, but the driver remains responsible for road conditions, legal speed, traffic signals, braking decisions, and safe vehicle operation. Route Collector alerts are informational only.
+
+
+## September 2026 road-test bundle
+
+- **Drive auto-stop:** after driving has been established, auto-stop requires about 10 continuous minutes without meaningful GPS position movement. Real movement clears the pending countdown state.
+- **Posted/collected speed:** collected speed remains authoritative. A significant turn ends the collected road speed, shows **Posted Pending**, and forces a fresh OpenStreetMap posted-speed lookup. Clearing a collected speed also refreshes posted speed.
+- **Deer zones:** finalized paired zones announce entry. From 30 minutes before local sunset through 30 minutes after local sunrise, the warning also reminds the driver to use high beams when safe.
+- **Red-light cameras:** camera capture snaps to a plausible intersection ahead in the current travel direction and provides visible/spoken intersection confirmation.
+- **Pedestrian crossings:** the 🚸 marker is stored at the exact tapped GPS position, is bidirectional, and warns at a speed-adaptive approach distance (120–350 m).
+- **Passing zones:** paired start/end zones are directional and warn on entry in the recorded direction to be aware of oncoming traffic.
+- **Live map:** the vehicle is horizontally centered and positioned about one-third of the map height up from the bottom, leaving more road visible ahead.
+- **Speed selector:** supports 30 through 110 km/h in 10 km/h steps.
+
+### Build/update status
+
+GitHub Actions publishes the stable `latest-debug` APK after successful builds. The proposed in-app Update / Restore Previous installer is **not enabled yet**: this repository is private and the Android app does not embed GitHub credentials, and Android downgrades need explicit package-installer handling. This remains a backlog item rather than silently weakening repository security.

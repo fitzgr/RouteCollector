@@ -154,6 +154,7 @@ fun RouteMap(
                         "speed" -> "Speed zone"
                         "speed_advance" -> "Speed change ahead"
                         "deer_zone_enter" -> "Deer crossing area"
+                        "pedestrian_crossing" -> "Pedestrian crossing"
                         "school_zone", "school_zone_start", "community_safety_zone_start" -> "Community safety zone start"
                         "school_zone_end", "community_safety_zone_end" -> "Community safety zone end"
                         "senior_safety_zone_start" -> "Senior safety zone start"
@@ -165,9 +166,9 @@ fun RouteMap(
                         "NEXT • ${d[0].roundToInt()} m • ${m.note}"
                     } else m.note
                     if (m.kind == "camera" || m.kind == "red_light_camera") {
-                        icon = ContextCompat.getDrawable(map.context, R.drawable.ic_red_light_camera)?.apply {
-                            setBounds(0, 0, (56 * map.context.resources.displayMetrics.density).toInt(), (56 * map.context.resources.displayMetrics.density).toInt())
-                        }
+                        icon = mapPinMarker("📷", Color.rgb(211,47,47), map.context.resources.displayMetrics.density)
+                    } else if (m.kind == "pedestrian_crossing") {
+                        icon = mapPinMarker("🚸", Color.rgb(255,193,7), map.context.resources.displayMetrics.density)
                     } else if (m.kind == "deer_zone_enter") {
                         icon = emojiMarker("🦌", map.context.resources.displayMetrics.density)
                     } else if (m.kind in setOf("community_safety_zone_start","community_safety_zone_end","school_zone","school_zone_start","school_zone_end")) {
@@ -197,6 +198,36 @@ private fun zoneMarker(color: Int, density: Float): Drawable = GradientDrawable(
     setColor(color)
     setStroke((3 * density).toInt(), Color.WHITE)
     setSize((30 * density).toInt(), (30 * density).toInt())
+}
+
+private fun mapPinMarker(symbol: String, color: Int, density: Float): Drawable {
+    val width = (48 * density).toInt()
+    val height = (62 * density).toInt()
+    return object : android.graphics.drawable.Drawable() {
+        private val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { this.color = color; style = android.graphics.Paint.Style.FILL }
+        private val outline = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { this.color = Color.WHITE; style = android.graphics.Paint.Style.STROKE; strokeWidth = 3 * density }
+        private val text = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { textSize = 25 * density; textAlign = android.graphics.Paint.Align.CENTER; color = Color.BLACK }
+        override fun draw(canvas: android.graphics.Canvas) {
+            val cx = bounds.exactCenterX()
+            val r = 20 * density
+            val cy = bounds.top + r + 2 * density
+            val path = android.graphics.Path().apply {
+                addCircle(cx, cy, r, android.graphics.Path.Direction.CW)
+                moveTo(cx - 10 * density, cy + 14 * density)
+                lineTo(cx, bounds.bottom.toFloat())
+                lineTo(cx + 10 * density, cy + 14 * density)
+                close()
+            }
+            canvas.drawPath(path, fill); canvas.drawPath(path, outline)
+            val fm = text.fontMetrics
+            canvas.drawText(symbol, cx, cy - (fm.ascent + fm.descent) / 2, text)
+        }
+        override fun setAlpha(alpha: Int) { fill.alpha = alpha; outline.alpha = alpha; text.alpha = alpha }
+        override fun setColorFilter(filter: android.graphics.ColorFilter?) { fill.colorFilter = filter; outline.colorFilter = filter; text.colorFilter = filter }
+        @Deprecated("Deprecated in Java") override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
+        override fun getIntrinsicWidth() = width
+        override fun getIntrinsicHeight() = height
+    }.apply { setBounds(0, 0, width, height) }
 }
 
 private fun emojiMarker(emoji: String, density: Float): Drawable {

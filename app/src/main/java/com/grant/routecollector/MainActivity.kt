@@ -7,6 +7,12 @@ import android.os.Bundle
 import android.os.Looper
 import android.location.Location
 import android.provider.Settings
+import android.net.Uri
+import androidx.core.content.FileProvider
+import java.net.HttpURLConnection
+import java.net.URL
+import org.json.JSONObject
+import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -76,6 +82,10 @@ private fun RouteCollectorScreen() {
     val collectedSpeed by TrackingState.currentSpeedIsCollected.collectAsStateWithLifecycle()
     var showSpeedMarker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var updateStatus by remember { mutableStateOf("Not checked") }
+    var latestBuildLabel by remember { mutableStateOf<String?>(null) }
+    var latestApkUrl by remember { mutableStateOf<String?>(null) }
+    var updateBusy by remember { mutableStateOf(false) }
     val prefs = remember { context.getSharedPreferences("routecollector_overlay", android.content.Context.MODE_PRIVATE) }
     var visualAlerts by remember { mutableStateOf(prefs.getBoolean("visual_alerts_enabled", true)) }
     var cameraWarning by remember { mutableIntStateOf(prefs.getInt("red_light_camera_warning_metres", 200)) }
@@ -457,6 +467,44 @@ private fun RouteCollectorScreen() {
                     }
                     if (showSettings) {
                         Text("Settings", style = MaterialTheme.typography.labelMedium)
+                        Text("Installed: ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.bodySmall)
+                        latestBuildLabel?.let { Text("Latest: $it", style = MaterialTheme.typography.bodySmall) }
+                        Text("Update: $updateStatus", style = MaterialTheme.typography.bodySmall)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = {
+                                if (!updateBusy) scope.launch {
+                                    updateBusy = true; updateStatus = "Checking..."
+                                    try {
+                                        val connection = (URL("https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json").openConnection() as HttpURLConnection).apply { instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000 }
+                                        val body = connection.inputStream.bufferedReader().use { it.readText() }; connection.disconnect()
+                                        val json = JSONObject(body)
+                                        val code = json.getInt("versionCode")
+                                        val name = json.optString("versionName", code.toString())
+                                        val built = json.optString("buildTime", "")
+                                        latestBuildLabel = "$name • $built"
+                                        latestApkUrl = json.getString("apkUrl")
+                                        updateStatus = if (code > BuildConfig.VERSION_CODE) "New version available" else "Up to date"
+                                    } catch (_: Exception) { updateStatus = "Unable to check - GitHub sign-in may be required" }
+                                    updateBusy = false
+                                }
+                            }, enabled = !updateBusy) { Text("Check latest") }
+                            Button(onClick = {
+                                val apkUrl = latestApkUrl
+                                if (apkUrl != null && !updateBusy) scope.launch {
+                                    updateBusy = true; updateStatus = "Downloading..."
+                                    try {
+                                        val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+                                        val apk = File(dir, "routecollector-update.apk")
+                                        val connection = (URL(apkUrl).openConnection() as HttpURLConnection).apply { instanceFollowRedirects = true; connectTimeout = 10000; readTimeout = 30000 }
+                                        connection.inputStream.use { input -> apk.outputStream().use { output -> input.copyTo(output) } }; connection.disconnect()
+                                        val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apk)
+                                        context.startActivity(Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, "application/vnd.android.package-archive"); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK) })
+                                        updateStatus = "Installer opened"
+                                    } catch (_: Exception) { updateStatus = "Download failed - GitHub sign-in may be required" }
+                                    updateBusy = false
+                                }
+                            }, enabled = latestApkUrl != null && !updateBusy) { Text("Download update") }
+                        }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Visual alerts")
                             Switch(checked = visualAlerts, onCheckedChange = { visualAlerts = it; prefs.edit().putBoolean("visual_alerts_enabled", it).apply() })

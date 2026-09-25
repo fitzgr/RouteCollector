@@ -274,7 +274,7 @@ private fun RouteCollectorScreen() {
                         TextButton(onClick = { showSettings = !showSettings }, modifier = Modifier.height(34.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) { Text("⚙") }
                     }
                     Text(
-                        "${if (collectedSpeed) "Collected" else "Posted"} ${postedSpeed?.let { "$it km/h" } ?: "--"}   Actual ${actualSpeed?.let { "${it.toInt()} km/h" } ?: "--"}",
+                        "${if (collectedSpeed) "Collected" else "Posted"} ${postedSpeed?.let { "$it km/h" } ?: "Pending"}   Actual ${actualSpeed?.let { "${it.toInt()} km/h" } ?: "--"}",
                         style = MaterialTheme.typography.bodyLarge
                     )
                     walkingCountdown?.let { Text("No GPS movement • auto-stop in ${it}s", style = MaterialTheme.typography.bodySmall, color = Color(0xFFB26A00)) }
@@ -286,7 +286,7 @@ private fun RouteCollectorScreen() {
                                 cameraCaptureBusy = true
                                 scope.launch {
                                 dao.latestPoint(driveId)?.let { point ->
-                                    val snap = IntersectionSnapper.findNearestIntersection(point.latitude, point.longitude)
+                                    val snap = IntersectionSnapper.findNearestIntersection(point.latitude, point.longitude, travelBearing = travelBearing)
                                     saveBoundaryMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = snap?.latitude ?: point.latitude, longitude = snap?.longitude ?: point.longitude, kind = "red_light_camera", note = snap?.let { "Red light camera — ${it.intersectionName}; observed ${point.latitude},${point.longitude}" } ?: "Red light camera — intersection not confirmed; observed ${point.latitude},${point.longitude}"))
                                     cameraCaptureMessage = if (snap != null) "✓ Camera marked • ${snap.intersectionName}" else "✓ Camera marked"
                                     scope.launch { kotlinx.coroutines.delay(4000); cameraCaptureMessage = null }
@@ -318,6 +318,21 @@ private fun RouteCollectorScreen() {
                                 }
                             }
                         }, enabled = activeDriveId != null, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("deer" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { Text("🦌", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF263238)); Box(Modifier.size(34.dp)) { Text("◆", style = MaterialTheme.typography.headlineMedium, color = Color(0xFF111111)); Text("◆", style = MaterialTheme.typography.headlineSmall, color = Color(0xFFFFD600), modifier = Modifier.padding(3.dp)) } } }
+                        Button(onClick = {
+                            val driveId = activeDriveId
+                            if (driveId != null) scope.launch {
+                                dao.latestPoint(driveId)?.let { point ->
+                                    dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = "pedestrian_crossing", note = "Pedestrian crossing"))
+                                    speakPrompt("Pedestrian crossing marked")
+                                }
+                            }
+                        }, enabled = activeDriveId != null, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Text("🚸", style = MaterialTheme.typography.titleLarge) }
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(onClick = {
+                            if (!pendingSpeedChosen) markerSpeed = postedSpeed?.takeIf { it in listOf(30,40,50,60,70,80,90,100,110) } ?: 60
+                            showSpeedMarker = !showSpeedMarker
+                        }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = if (overSpeedActive) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) { Text("Speed") }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {
@@ -367,9 +382,19 @@ private fun RouteCollectorScreen() {
                             Text(if ("senior" in activeZones) "Senior ■" else "Senior ▶")
                         }
                         Button(onClick = {
-                            if (!pendingSpeedChosen) markerSpeed = postedSpeed?.takeIf { it in listOf(30,40,50,60,70,80,90,100,110) } ?: 60
-                            showSpeedMarker = !showSpeedMarker
-                        }, modifier = Modifier.weight(0.90f), colors = ButtonDefaults.buttonColors(containerColor = if (overSpeedActive) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) { Text("Speed", maxLines = 1) }
+                            val driveId = activeDriveId
+                            if (driveId != null) scope.launch {
+                                dao.latestPoint(driveId)?.let { point ->
+                                    val isActive = "passing" in activeZones
+                                    val pairKey = "active_pair_passing"
+                                    val pair = if (isActive) prefs.getString(pairKey, null) ?: UUID.randomUUID().toString() else UUID.randomUUID().toString()
+                                    dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = if (isActive) "passing_zone_end" else "passing_zone_start", note = (if (isActive) "Passing zone end" else "Passing zone start") + "; pair=$pair; bearing=${travelBearing?.roundToInt() ?: -1}"))
+                                    if (isActive) prefs.edit().remove(pairKey).apply() else prefs.edit().putString(pairKey, pair).apply()
+                                    TrackingState.activeZoneKinds.value = if (isActive) TrackingState.activeZoneKinds.value - "passing" else TrackingState.activeZoneKinds.value + "passing"
+                                    speakPrompt(if (isActive) "Passing zone end marked" else "Passing zone start marked")
+                                }
+                            }
+                        }, modifier = Modifier.weight(0.90f), colors = ButtonDefaults.buttonColors(containerColor = if ("passing" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) { Text(if ("passing" in activeZones) "Passing ■" else "Passing ▶", maxLines = 1) }
                     }
                     if (showSpeedMarker) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

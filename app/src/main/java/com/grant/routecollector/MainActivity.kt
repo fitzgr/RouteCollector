@@ -74,6 +74,8 @@ private fun UiMapPin(symbol: String, pinColor: Color, symbolSize: Int) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun RouteCollectorScreen() {
     val context = LocalContext.current
     val dao = remember { AppDatabase.get(context).dao() }

@@ -206,7 +206,7 @@ private fun mapPinMarker(symbol: String, color: Int, density: Float): Drawable {
     return object : android.graphics.drawable.Drawable() {
         private val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { this.color = color; style = android.graphics.Paint.Style.FILL }
         private val outline = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { this.color = Color.WHITE; style = android.graphics.Paint.Style.STROKE; strokeWidth = 3 * density }
-        private val text = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { textSize = 25 * density; textAlign = android.graphics.Paint.Align.CENTER; color = Color.BLACK }
+        private val symbolPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { textSize = 25 * density; textAlign = android.graphics.Paint.Align.CENTER; color = Color.BLACK }
         override fun draw(canvas: android.graphics.Canvas) {
             val cx = bounds.exactCenterX()
             val r = 20 * density
@@ -219,11 +219,11 @@ private fun mapPinMarker(symbol: String, color: Int, density: Float): Drawable {
                 close()
             }
             canvas.drawPath(path, fill); canvas.drawPath(path, outline)
-            val fm = text.fontMetrics
-            canvas.drawText(symbol, cx, cy - (fm.ascent + fm.descent) / 2, text)
+            val fm = symbolPaint.fontMetrics
+            canvas.drawText(symbol, cx, cy - (fm.ascent + fm.descent) / 2, symbolPaint)
         }
-        override fun setAlpha(alpha: Int) { fill.alpha = alpha; outline.alpha = alpha; text.alpha = alpha }
-        override fun setColorFilter(filter: android.graphics.ColorFilter?) { fill.colorFilter = filter; outline.colorFilter = filter; text.colorFilter = filter }
+        override fun setAlpha(alpha: Int) { fill.alpha = alpha; outline.alpha = alpha; symbolPaint.alpha = alpha }
+        override fun setColorFilter(filter: android.graphics.ColorFilter?) { fill.colorFilter = filter; outline.colorFilter = filter; symbolPaint.colorFilter = filter }
         @Deprecated("Deprecated in Java") override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
         override fun getIntrinsicWidth() = width
         override fun getIntrinsicHeight() = height

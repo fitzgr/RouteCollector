@@ -62,6 +62,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk routecollector-debug.apk
+          BUILD_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          printf '{"versionCode":%s,"versionName":"0.1.%s","buildTime":"%s","apkUrl":"https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/routecollector-debug.apk"}\n' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_NUMBER" "$BUILD_TIME" > update.json
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -69,12 +71,12 @@ jobs:
           git push origin refs/tags/latest-debug --force
 
           if gh release view latest-debug >/dev/null 2>&1; then
-            gh release upload latest-debug routecollector-debug.apk --clobber
+            gh release upload latest-debug routecollector-debug.apk update.json --clobber
             gh release edit latest-debug \
               --title "Route Collector Latest Debug" \
               --notes "Latest cloud-built Route Collector debug APK. Branch: $GITHUB_REF_NAME. Commit: $GITHUB_SHA. For testing only."
           else
-            gh release create latest-debug routecollector-debug.apk \
+            gh release create latest-debug routecollector-debug.apk update.json \
               --title "Route Collector Latest Debug" \
               --notes "Latest cloud-built Route Collector debug APK. Branch: $GITHUB_REF_NAME. Commit: $GITHUB_SHA. For testing only." \
               --prerelease

@@ -200,11 +200,11 @@ private fun zoneMarker(color: Int, density: Float): Drawable = GradientDrawable(
     setSize((30 * density).toInt(), (30 * density).toInt())
 }
 
-private fun mapPinMarker(symbol: String, color: Int, density: Float): Drawable {
+private fun mapPinMarker(symbol: String, pinColor: Int, density: Float): Drawable {
     val width = (48 * density).toInt()
     val height = (62 * density).toInt()
     return object : android.graphics.drawable.Drawable() {
-        private val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { this.color = color; style = android.graphics.Paint.Style.FILL }
+        private val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = pinColor; style = android.graphics.Paint.Style.FILL }
         private val outline = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { this.color = Color.WHITE; style = android.graphics.Paint.Style.STROKE; strokeWidth = 3 * density }
         private val symbolPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { textSize = 25 * density; textAlign = android.graphics.Paint.Align.CENTER; color = Color.BLACK }
         override fun draw(canvas: android.graphics.Canvas) {

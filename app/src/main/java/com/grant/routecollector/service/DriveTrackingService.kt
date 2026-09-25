@@ -350,9 +350,19 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
+    private fun isSchoolActivityTime(): Boolean {
+        val cal = java.util.Calendar.getInstance()
+        val day = cal.get(java.util.Calendar.DAY_OF_WEEK)
+        if (day == java.util.Calendar.SATURDAY || day == java.util.Calendar.SUNDAY) return false
+        val minutes = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
+        // Broad weekday windows cover arrival, lunch/recess activity and dismissal without
+        // assuming that every community zone follows the exact same bell schedule.
+        return minutes in (7 * 60 + 30)..(9 * 60 + 30) || minutes in (11 * 60)..(13 * 60 + 30) || minutes in (14 * 60)..(16 * 60 + 30)
+    }
+
     private fun handleZoneFact(fact: MarkerEntity, distance: Float, approaching: Boolean) {
         if (fact.id in announcedMarkerIds || !approaching || distance > ACTIVE_ZONE_RADIUS_METRES) return
-        val phrase = when (fact.kind) { "community_safety_zone_start", "school_zone", "school_zone_start" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "community"; currentTravelBearing?.let { activeZoneEntryBearings["community"] = it }; "Entering community zone" }; "community_safety_zone_end", "school_zone_end" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"; activeZoneEntryBearings.remove("community"); "Leaving community zone" }; "senior_safety_zone_start" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "senior"; currentTravelBearing?.let { activeZoneEntryBearings["senior"] = it }; "Entering senior zone" }; "senior_safety_zone_end" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"; activeZoneEntryBearings.remove("senior"); "Leaving senior zone" }; else -> null } ?: return
+        val phrase = when (fact.kind) { "community_safety_zone_start", "school_zone", "school_zone_start" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "community"; currentTravelBearing?.let { activeZoneEntryBearings["community"] = it }; if (isSchoolActivityTime()) "Entering community zone. School hours. Watch for children." else "Entering community zone" }; "community_safety_zone_end", "school_zone_end" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"; activeZoneEntryBearings.remove("community"); "Leaving community zone" }; "senior_safety_zone_start" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "senior"; currentTravelBearing?.let { activeZoneEntryBearings["senior"] = it }; "Entering senior zone" }; "senior_safety_zone_end" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"; activeZoneEntryBearings.remove("senior"); "Leaving senior zone" }; else -> null } ?: return
         announcedMarkerIds += fact.id; speak(phrase)
     }
     private fun handleRedLightCamera(fact: MarkerEntity, distance: Float, approaching: Boolean, warningMetres: Float) {

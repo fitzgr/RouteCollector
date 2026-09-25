@@ -61,8 +61,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
 @Composable
 private fun UiMapPin(symbol: String, pinColor: Color, symbolSize: Int) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy((-5).dp)) {

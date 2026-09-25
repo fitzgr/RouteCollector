@@ -58,6 +58,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val SPEED_RECOVERY_HYSTERESIS_KPH = 2f
         private const val ZONE_TURN_EXIT_DEGREES = 65f
         private const val DEER_PAIR_MAX_METRES = 20_000f
+        private const val PEDESTRIAN_MIN_WARNING_METRES = 120f
+        private const val PEDESTRIAN_MAX_WARNING_METRES = 350f
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -88,6 +90,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private var lastOsmSpeedAttemptElapsedRealtime = 0L
     private var osmSpeedLookupInFlight = false
     private var speedZoneManuallyCleared = false
+    private var lastSpeedRoadBearing: Float? = null
     private val activeZoneEntryBearings = mutableMapOf<String, Float>()
     private var musicPausedForPrompt = false
     private val pendingSpeech = mutableListOf<String>()
@@ -99,7 +102,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             for (location in result.locations) {
                 TrackingState.latestLat.value = location.latitude; TrackingState.latestLon.value = location.longitude
                 val actualSpeedKph = if (location.hasSpeed()) location.speed * 3.6f else null
-                TrackingState.latestSpeedKph.value = actualSpeedKph; updateTravelBearing(location, actualSpeedKph); clearSafetyZonesAfterTurn(); bootstrapPostedSpeedFromOsm(location); checkOverSpeedThreshold(actualSpeedKph); if (checkNoMovementAutoEnd(location, actualSpeedKph)) return
+                TrackingState.latestSpeedKph.value = actualSpeedKph; updateTravelBearing(location, actualSpeedKph); clearSafetyZonesAfterTurn(); clearCollectedSpeedAfterTurn(location); bootstrapPostedSpeedFromOsm(location); checkOverSpeedThreshold(actualSpeedKph); if (checkNoMovementAutoEnd(location, actualSpeedKph)) return
                 scope.launch { dao.insertPoint(TrackPointEntity(driveId = id, timestamp = location.time, latitude = location.latitude, longitude = location.longitude, accuracyMetres = location.accuracy, speedMps = if (location.hasSpeed()) location.speed else null)); announceNearbyRoadFacts(location) }
             }
         }
@@ -114,8 +117,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
                 driveId = intent.getLongExtra(EXTRA_DRIVE_ID, -1L).takeIf { it > 0 }
                 driveId?.let {
                     warnedReductionMarkerIds.clear(); announcedMarkerIds.clear(); warnedCameraMarkerIds.clear(); verifiedCameraMarkerIds.clear(); camerasCurrentlyInRange.clear(); passiveReverseMarkerIds.clear(); previousMarkerDistances.clear(); markerBearingCache.clear()
-                    previousLocationForBearing = null; currentTravelBearing = null; currentSpeedLimit = null; overSpeedAlertActive = false; noMovementSinceElapsedRealtime = null; noMovementAnchor = null; drivingWasConfirmed = false; lastOsmSpeedAttemptElapsedRealtime = 0L; osmSpeedLookupInFlight = false; speedZoneManuallyCleared = false
-                    TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); TrackingState.currentSpeedIsCollected.value = false; TrackingState.activeDriveId.value = it
+                    previousLocationForBearing = null; currentTravelBearing = null; currentSpeedLimit = null; overSpeedAlertActive = false; noMovementSinceElapsedRealtime = null; noMovementAnchor = null; drivingWasConfirmed = false; lastOsmSpeedAttemptElapsedRealtime = 0L; osmSpeedLookupInFlight = false; speedZoneManuallyCleared = false; lastSpeedRoadBearing = null
+                    TrackingState.walkingAutoStopSeconds.value = null; TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); TrackingState.currentSpeedIsCollected.value = false; TrackingState.activeDriveId.value = it
                     startForeground(NOTIFICATION_ID, buildNotification()); beginUpdates()
                 }
             }
@@ -177,8 +180,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
 
         if (anchor.distanceTo(location) >= AUTO_END_MOVEMENT_METRES) {
             noMovementAnchor = Location(location)
-            noMovementSinceElapsedRealtime = SystemClock.elapsedRealtime()
-            TrackingState.walkingAutoStopSeconds.value = (AUTO_END_NO_MOVEMENT_MILLIS / 1000L).toInt()
+            noMovementSinceElapsedRealtime = null
+            TrackingState.walkingAutoStopSeconds.value = null
             return false
         }
 
@@ -217,7 +220,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         val facts = dao.getSpokenRoadFacts(); val cameraWarningMetres = getSharedPreferences(PREFS, MODE_PRIVATE).getInt(PREF_CAMERA_WARNING_METRES, 200).toFloat(); val deerFacts = facts.filter { it.kind == "deer_zone_enter" }
         for (fact in facts) {
             val result = FloatArray(1); Location.distanceBetween(location.latitude, location.longitude, fact.latitude, fact.longitude, result); val distance = result[0]; val previousDistance = previousMarkerDistances[fact.id]; val approaching = previousDistance == null || distance < previousDistance; previousMarkerDistances[fact.id] = distance
-            when (fact.kind) { "speed", "speed_advance" -> handleDirectionalSpeedFact(fact, distance, approaching); "red_light_camera", "camera" -> handleRedLightCamera(fact, distance, approaching, cameraWarningMetres); "deer_zone_enter" -> handleDeerZoneFact(fact, deerFacts, distance, approaching); else -> handleZoneFact(fact, distance, approaching) }
+            when (fact.kind) { "speed", "speed_advance" -> handleDirectionalSpeedFact(fact, distance, approaching); "red_light_camera", "camera" -> handleRedLightCamera(fact, distance, approaching, cameraWarningMetres); "deer_zone_enter" -> handleDeerZoneFact(fact, deerFacts, distance, approaching); "pedestrian_crossing" -> handlePedestrianCrossing(fact, distance, approaching); "passing_zone_start", "passing_zone_end" -> handlePassingZone(fact, distance, approaching); else -> handleZoneFact(fact, distance, approaching) }
         }
     }
 
@@ -228,7 +231,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         if (fact.kind == "speed_advance") { if (approaching && distance <= ACTIVE_ZONE_RADIUS_METRES && fact.id !in announcedMarkerIds) { announcedMarkerIds += fact.id; speak("Reduce to $targetSpeed ahead") }; return }
         val current = currentSpeedLimit
         if (current != null && targetSpeed < current && fact.id !in warnedReductionMarkerIds && approaching && distance <= REDUCTION_WARNING_RADIUS_METRES && distance > ACTIVE_ZONE_RADIUS_METRES) { warnedReductionMarkerIds += fact.id; speak("Reduce to $targetSpeed") }
-        if (fact.id !in announcedMarkerIds && approaching && distance <= ACTIVE_ZONE_RADIUS_METRES) { announcedMarkerIds += fact.id; currentSpeedLimit = targetSpeed; TrackingState.currentSpeedIsCollected.value = true; speedZoneManuallyCleared = false; TrackingState.currentPostedSpeed.value = targetSpeed; overSpeedAlertActive = false; speak("$targetSpeed kilometre zone active") }
+        if (fact.id !in announcedMarkerIds && approaching && distance <= ACTIVE_ZONE_RADIUS_METRES) { announcedMarkerIds += fact.id; currentSpeedLimit = targetSpeed; TrackingState.currentSpeedIsCollected.value = true; speedZoneManuallyCleared = false; lastSpeedRoadBearing = currentTravelBearing; TrackingState.currentPostedSpeed.value = targetSpeed; overSpeedAlertActive = false; speak("$targetSpeed kilometre zone active") }
     }
 
     private fun handleDeerZoneFact(fact: MarkerEntity, deerFacts: List<MarkerEntity>, distance: Float, approaching: Boolean) {
@@ -239,11 +242,55 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         }
         if (!paired) return
         val travel = currentTravelBearing ?: return; val difference = bearingDifference(savedBearing, travel)
-        val phrase = when { difference <= SAME_DIRECTION_TOLERANCE_DEGREES -> "Deer crossing area"; difference >= REVERSE_DIRECTION_MIN_DEGREES -> "Leaving deer area"; else -> return }
+        val phrase = when { difference <= SAME_DIRECTION_TOLERANCE_DEGREES -> if (isDeerHighRiskTime()) "Entering deer zone. Use high beams when safe." else "Entering deer zone"; difference >= REVERSE_DIRECTION_MIN_DEGREES -> "Leaving deer area"; else -> return }
         announcedMarkerIds += fact.id
         if (difference <= SAME_DIRECTION_TOLERANCE_DEGREES) TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value + "deer"
         else TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
         speak(phrase)
+    }
+
+    private fun clearCollectedSpeedAfterTurn(location: Location) {
+        if (!TrackingState.currentSpeedIsCollected.value) return
+        val entry = lastSpeedRoadBearing ?: return
+        val travel = currentTravelBearing ?: return
+        if (bearingDifference(entry, travel) < ZONE_TURN_EXIT_DEGREES) return
+        currentSpeedLimit = null
+        TrackingState.currentSpeedIsCollected.value = false
+        TrackingState.currentPostedSpeed.value = null
+        overSpeedAlertActive = false
+        speedZoneManuallyCleared = false
+        lastSpeedRoadBearing = null
+        lastOsmSpeedAttemptElapsedRealtime = 0L
+        TrackingState.postDriverAlert("Posted speed pending", kind = "speed_pending")
+        bootstrapPostedSpeedFromOsm(location)
+    }
+
+    private fun handlePedestrianCrossing(fact: MarkerEntity, distance: Float, approaching: Boolean) {
+        val speed = TrackingState.latestSpeedKph.value ?: 50f
+        val warning = (speed * 4f).coerceIn(PEDESTRIAN_MIN_WARNING_METRES, PEDESTRIAN_MAX_WARNING_METRES)
+        if (fact.id !in announcedMarkerIds && approaching && distance <= warning) {
+            announcedMarkerIds += fact.id
+            speak("Pedestrian crossing ahead")
+        }
+    }
+
+    private suspend fun handlePassingZone(fact: MarkerEntity, distance: Float, approaching: Boolean) {
+        if (fact.id in announcedMarkerIds || !approaching || distance > ACTIVE_ZONE_RADIUS_METRES) return
+        val saved = markerBearing(fact) ?: return
+        val travel = currentTravelBearing ?: return
+        if (bearingDifference(saved, travel) > SAME_DIRECTION_TOLERANCE_DEGREES) return
+        announcedMarkerIds += fact.id
+        if (fact.kind == "passing_zone_start") {
+            TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "passing"
+            speak("Entering passing zone. Be aware of oncoming traffic.")
+        } else {
+            TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "passing"
+        }
+    }
+
+    private fun isDeerHighRiskTime(): Boolean {
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        return hour >= 18 || hour < 8
     }
 
     private suspend fun markerBearing(fact: MarkerEntity): Float? { parseCapturedBearing(fact.note)?.let { return it }; if (markerBearingCache.containsKey(fact.id)) return markerBearingCache[fact.id]; val points = dao.pointsBeforeMarker(fact.driveId, fact.timestamp); val bearing = if (points.size >= 2) { val newer = points[0]; val older = points[1]; val result = FloatArray(1); Location.distanceBetween(older.latitude, older.longitude, newer.latitude, newer.longitude, result); if (result[0] >= 3f) { val from = Location("marker-history").apply { latitude = older.latitude; longitude = older.longitude }; val to = Location("marker-history").apply { latitude = newer.latitude; longitude = newer.longitude }; normalizeBearing(from.bearingTo(to)) } else null } else null; markerBearingCache[fact.id] = bearing; return bearing }

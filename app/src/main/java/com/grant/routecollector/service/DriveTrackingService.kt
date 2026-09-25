@@ -289,8 +289,23 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun isDeerHighRiskTime(): Boolean {
-        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-        return hour >= 18 || hour < 8
+        val lat = TrackingState.latestLat.value ?: return false
+        val lon = TrackingState.latestLon.value ?: return false
+        val cal = java.util.Calendar.getInstance()
+        val day = cal.get(java.util.Calendar.DAY_OF_YEAR)
+        val gamma = 2.0 * Math.PI / 365.0 * (day - 1)
+        val eqTime = 229.18 * (0.000075 + 0.001868 * kotlin.math.cos(gamma) - 0.032077 * kotlin.math.sin(gamma) - 0.014615 * kotlin.math.cos(2 * gamma) - 0.040849 * kotlin.math.sin(2 * gamma))
+        val decl = 0.006918 - 0.399912 * kotlin.math.cos(gamma) + 0.070257 * kotlin.math.sin(gamma) - 0.006758 * kotlin.math.cos(2 * gamma) + 0.000907 * kotlin.math.sin(2 * gamma) - 0.002697 * kotlin.math.cos(3 * gamma) + 0.00148 * kotlin.math.sin(3 * gamma)
+        val latRad = Math.toRadians(lat)
+        val zenith = Math.toRadians(90.833)
+        val cosHa = ((kotlin.math.cos(zenith) / (kotlin.math.cos(latRad) * kotlin.math.cos(decl))) - kotlin.math.tan(latRad) * kotlin.math.tan(decl)).coerceIn(-1.0, 1.0)
+        val haDeg = Math.toDegrees(kotlin.math.acos(cosHa))
+        val tzMinutes = cal.timeZone.getOffset(cal.timeInMillis) / 60000.0
+        val solarNoon = 720.0 - 4.0 * lon - eqTime + tzMinutes
+        val sunrise = solarNoon - 4.0 * haDeg
+        val sunset = solarNoon + 4.0 * haDeg
+        val nowMinutes = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60.0 + cal.get(java.util.Calendar.MINUTE)
+        return nowMinutes >= sunset - 30.0 || nowMinutes <= sunrise + 30.0
     }
 
     private suspend fun markerBearing(fact: MarkerEntity): Float? { parseCapturedBearing(fact.note)?.let { return it }; if (markerBearingCache.containsKey(fact.id)) return markerBearingCache[fact.id]; val points = dao.pointsBeforeMarker(fact.driveId, fact.timestamp); val bearing = if (points.size >= 2) { val newer = points[0]; val older = points[1]; val result = FloatArray(1); Location.distanceBetween(older.latitude, older.longitude, newer.latitude, newer.longitude, result); if (result[0] >= 3f) { val from = Location("marker-history").apply { latitude = older.latitude; longitude = older.longitude }; val to = Location("marker-history").apply { latitude = newer.latitude; longitude = newer.longitude }; normalizeBearing(from.bearingTo(to)) } else null } else null; markerBearingCache[fact.id] = bearing; return bearing }

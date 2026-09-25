@@ -365,7 +365,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Community safety end marked" else "Community safety start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(1.30f), colors = ButtonDefaults.buttonColors(containerColor = if ("community" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) {
+                        }, modifier = Modifier.weight(1.15f), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("community" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) {
                             Text(if ("community" in activeZones) "Community ■" else "Community ▶")
                         }
                         Button(onClick = {
@@ -388,7 +388,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Senior safety end marked" else "Senior safety start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(1.0f), colors = ButtonDefaults.buttonColors(containerColor = if ("senior" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) {
+                        }, modifier = Modifier.weight(0.90f), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("senior" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) {
                             Text(if ("senior" in activeZones) "Senior ■" else "Senior ▶")
                         }
                         Button(onClick = {
@@ -404,7 +404,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Passing zone end marked" else "Passing zone start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(0.90f), colors = ButtonDefaults.buttonColors(containerColor = if ("passing" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) { Text(if ("passing" in activeZones) "Passing ■" else "Passing ▶", maxLines = 1) }
+                        }, modifier = Modifier.weight(1.05f), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("passing" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) { Text(if ("passing" in activeZones) "Passing ■" else "Passing ▶", maxLines = 1) }
                     }
                     if (showSpeedMarker) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

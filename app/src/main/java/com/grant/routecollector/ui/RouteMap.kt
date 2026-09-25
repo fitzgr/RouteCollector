@@ -100,7 +100,7 @@ fun RouteMap(
                     if (map.width > 0 && map.height > 0) {
                         val projection = map.projection
                         val screen = projection.toPixels(current, Point())
-                        val targetY = (map.height * 0.72f).toInt()
+                        val targetY = (map.height * 0.67f).toInt()
                         val desiredCenter = projection.fromPixels(screen.x, screen.y - targetY + map.height / 2)
                         map.controller.setCenter(desiredCenter)
                     }

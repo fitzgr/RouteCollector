@@ -69,7 +69,13 @@ object IntersectionSnapper {
                 Location.distanceBetween(latitude, longitude, point.first, point.second, distance)
                 if (distance[0] > radiusMetres) continue
                 val names = roadNames.take(2).sorted()
-                if (travelBearing != null && distance[0] > 8f) {\n                    val from = Location("camera").apply { this.latitude = latitude; this.longitude = longitude }\n                    val to = Location("intersection").apply { this.latitude = point.first; this.longitude = point.second }\n                    val raw = kotlin.math.abs((((from.bearingTo(to) - travelBearing) % 360f) + 540f) % 360f - 180f)\n                    if (raw > 70f) continue\n                }\n                val candidate = SnapResult(
+                if (travelBearing != null && distance[0] > 8f) {
+                    val from = Location("camera").apply { this.latitude = latitude; this.longitude = longitude }
+                    val to = Location("intersection").apply { this.latitude = point.first; this.longitude = point.second }
+                    val raw = kotlin.math.abs((((from.bearingTo(to) - travelBearing) % 360f) + 540f) % 360f - 180f)
+                    if (raw > 70f) continue
+                }
+                val candidate = SnapResult(
                     latitude = point.first,
                     longitude = point.second,
                     intersectionName = names.joinToString(" & "),

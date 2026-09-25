@@ -159,7 +159,19 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             }
         }
     }
-    private fun clearSpeedZone() { currentSpeedLimit = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.currentPostedSpeed.value = null; overSpeedAlertActive = false; speedZoneManuallyCleared = true; TrackingState.postDriverAlert("Posted speed cleared", kind = "zone_cleared") }
+    private fun clearSpeedZone() {
+        currentSpeedLimit = null
+        TrackingState.currentSpeedIsCollected.value = false
+        TrackingState.currentPostedSpeed.value = null
+        overSpeedAlertActive = false
+        speedZoneManuallyCleared = false
+        lastSpeedRoadBearing = null
+        lastOsmSpeedAttemptElapsedRealtime = 0L
+        TrackingState.postDriverAlert("Posted speed pending", kind = "speed_pending")
+        val lat = TrackingState.latestLat.value
+        val lon = TrackingState.latestLon.value
+        if (lat != null && lon != null) bootstrapPostedSpeedFromOsm(Location("speed-refresh").apply { latitude = lat; longitude = lon })
+    }
 
     private fun checkNoMovementAutoEnd(location: Location, actualSpeedKph: Float?): Boolean {
         if (actualSpeedKph != null && actualSpeedKph >= DRIVING_CONFIRMED_SPEED_KPH) drivingWasConfirmed = true
@@ -251,6 +263,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
 
     private fun clearCollectedSpeedAfterTurn(location: Location) {
         if (!TrackingState.currentSpeedIsCollected.value) return
+        if (lastSpeedRoadBearing == null) { lastSpeedRoadBearing = currentTravelBearing; return }
         val entry = lastSpeedRoadBearing ?: return
         val travel = currentTravelBearing ?: return
         if (bearingDifference(entry, travel) < ZONE_TURN_EXIT_DEGREES) return

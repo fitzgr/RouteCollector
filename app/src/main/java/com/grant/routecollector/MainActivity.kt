@@ -98,7 +98,6 @@ private fun RouteCollectorScreen() {
     val postedSpeed by TrackingState.currentPostedSpeed.collectAsStateWithLifecycle()
     val actualSpeed by TrackingState.latestSpeedKph.collectAsStateWithLifecycle()
     val collectedSpeed by TrackingState.currentSpeedIsCollected.collectAsStateWithLifecycle()
-    var showSpeedMarker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var updateStatus by remember { mutableStateOf("Not checked") }
     var updateWebUrl by remember { mutableStateOf<String?>(null) }
@@ -359,12 +358,6 @@ private fun RouteCollectorScreen() {
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {
-                            if (!pendingSpeedChosen) markerSpeed = postedSpeed?.takeIf { it in listOf(30,40,50,60,70,80,90,100,110) } ?: 60
-                            showSpeedMarker = !showSpeedMarker
-                        }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = if (overSpeedActive) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) { Text("Speed") }
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Button(onClick = {
                             val driveId = activeDriveId
                             if (driveId != null) scope.launch {
                                 dao.latestPoint(driveId)?.let { point ->
@@ -425,8 +418,7 @@ private fun RouteCollectorScreen() {
                             }
                         }, modifier = Modifier.weight(1.05f), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("passing" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) { Text(if ("passing" in activeZones) "Passing ■" else "Passing ▶", maxLines = 1) }
                     }
-                    if (showSpeedMarker) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             var speedMenu by remember { mutableStateOf(false) }
                             var typeMenu by remember { mutableStateOf(false) }
                             Box(Modifier.weight(1f)) {
@@ -473,7 +465,6 @@ private fun RouteCollectorScreen() {
                                     }
                                 }
                             }) { Text("Set") }
-                        }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = {

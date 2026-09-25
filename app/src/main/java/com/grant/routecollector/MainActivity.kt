@@ -83,6 +83,7 @@ private fun RouteCollectorScreen() {
     var showSpeedMarker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var updateStatus by remember { mutableStateOf("Not checked") }
+    var updateWebUrl by remember { mutableStateOf<String?>(null) }
     var latestBuildLabel by remember { mutableStateOf<String?>(null) }
     var latestApkUrl by remember { mutableStateOf<String?>(null) }
     var updateBusy by remember { mutableStateOf(false) }
@@ -484,7 +485,7 @@ private fun RouteCollectorScreen() {
                                         latestBuildLabel = "$name • $built"
                                         latestApkUrl = json.getString("apkUrl")
                                         updateStatus = if (code > BuildConfig.VERSION_CODE) "New version available" else "Up to date"
-                                    } catch (_: Exception) { updateStatus = "Unable to check - GitHub sign-in may be required" }
+                                    } catch (_: Exception) { updateStatus = "Open latest build to update"; updateWebUrl = "https://github.com/fitzgr/RouteCollector/releases/tag/latest-debug" }
                                     updateBusy = false
                                 }
                             }, enabled = !updateBusy) { Text("Check latest") }
@@ -504,6 +505,9 @@ private fun RouteCollectorScreen() {
                                     updateBusy = false
                                 }
                             }, enabled = latestApkUrl != null && !updateBusy) { Text("Download update") }
+                            updateWebUrl?.let { url ->
+                                Button(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }) { Text("Open latest build") }
+                            }
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Visual alerts")

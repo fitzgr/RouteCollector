@@ -18,6 +18,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -58,6 +63,19 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@Composable
+private fun UiMapPin(symbol: String, pinColor: Color, symbolSize: Int) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy((-5).dp)) {
+        Box(
+            modifier = Modifier.size(30.dp).shadow(2.dp, CircleShape).background(pinColor, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(symbol, fontSize = symbolSize.sp, color = Color.Black)
+        }
+        Text("▼", fontSize = 15.sp, color = pinColor)
+    }
+}
+
 private fun RouteCollectorScreen() {
     val context = LocalContext.current
     val dao = remember { AppDatabase.get(context).dao() }
@@ -307,7 +325,7 @@ private fun RouteCollectorScreen() {
                                 cameraCaptureBusy = false
                             }
                             }
-                        }, enabled = activeDriveId != null && !cameraCaptureBusy, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("camera" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Text("🚦📷", style = MaterialTheme.typography.titleLarge) }
+                        }, enabled = activeDriveId != null && !cameraCaptureBusy, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("camera" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { UiMapPin(symbol = "📷", pinColor = Color(0xFFD32F2F), symbolSize = 15) }
                         Button(onClick = {
                             val driveId = activeDriveId
                             if (driveId != null) scope.launch {
@@ -337,7 +355,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt("Pedestrian crossing marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Text("🚸", style = MaterialTheme.typography.titleLarge) }
+                        }, enabled = activeDriveId != null, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { UiMapPin(symbol = "🚸", pinColor = Color(0xFFFFC107), symbolSize = 19) }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {

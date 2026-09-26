@@ -47,14 +47,13 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug
 
-      - name: Upload Route Collector debug APK artifact
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: routecollector-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 3
+      - name: Verify APK signing certificate
+        if: github.event_name != 'pull_request'
+        run: |
+          EXPECTED_SHA256="4671C8D0EFCF6B53D84D6F72C8F9D99B22623EDE4FE2D35F9566846C9E988B31"
+          ACTUAL_SHA256="$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | awk -F': ' '/SHA256:/{gsub(":","",$2); print toupper($2); exit}')"
+          echo "APK signer SHA-256: $ACTUAL_SHA256"
+          test "$ACTUAL_SHA256" = "$EXPECTED_SHA256"
 
       - name: Publish stable latest-debug release
         if: github.event_name != 'pull_request'
@@ -81,3 +80,12 @@ jobs:
               --notes "Latest cloud-built Route Collector debug APK. Branch: $GITHUB_REF_NAME. Commit: $GITHUB_SHA. For testing only." \
               --prerelease
           fi
+
+      - name: Upload Route Collector debug APK artifact
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: routecollector-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 3

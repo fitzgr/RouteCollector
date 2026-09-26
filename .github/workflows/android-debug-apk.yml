@@ -67,8 +67,12 @@ jobs:
           BUILD_FINISHED_AT="$(date +%s)"
           BUILD_SECONDS="$((BUILD_FINISHED_AT - BUILD_STARTED_AT))"
           BUILD_DURATION="$((BUILD_SECONDS / 60))m $((BUILD_SECONDS % 60))s"
-          VERSION_CODE="$(( $(date -u +%s) / 60 - 28000000 ))"
-          printf '{"versionCode":%s,"versionName":"0.1.%s","buildTime":"%s","buildDuration":"%s","apkUrl":"https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/routecollector-debug.apk"}\n' "$VERSION_CODE" "$VERSION_CODE" "$BUILD_TIME" "$BUILD_DURATION" > update.json
+          VERSION_CODE="$(jq -r '.elements[0].versionCode' app/build/outputs/apk/debug/output-metadata.json)"
+          VERSION_NAME="$(jq -r '.elements[0].versionName' app/build/outputs/apk/debug/output-metadata.json)"
+          test "$VERSION_CODE" != "null"
+          test "$VERSION_NAME" != "null"
+          echo "Publishing APK version $VERSION_NAME (build $VERSION_CODE)"
+          printf '{"versionCode":%s,"versionName":"%s","buildTime":"%s","buildDuration":"%s","apkUrl":"https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/routecollector-debug.apk"}\n' "$VERSION_CODE" "$VERSION_NAME" "$BUILD_TIME" "$BUILD_DURATION" > update.json
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -79,11 +83,11 @@ jobs:
             gh release upload latest-debug routecollector-debug.apk update.json --clobber
             gh release edit latest-debug \
               --title "Route Collector Latest Debug" \
-              --notes "Latest cloud-built Route Collector debug APK. Branch: $GITHUB_REF_NAME. Commit: $GITHUB_SHA. For testing only."
+              --notes "Latest cloud-built Route Collector debug APK. Branch: $GITHUB_REF_NAME. Commit: $GITHUB_SHA. Version: $VERSION_NAME (build $VERSION_CODE). For testing only."
           else
             gh release create latest-debug routecollector-debug.apk update.json \
               --title "Route Collector Latest Debug" \
-              --notes "Latest cloud-built Route Collector debug APK. Branch: $GITHUB_REF_NAME. Commit: $GITHUB_SHA. For testing only." \
+              --notes "Latest cloud-built Route Collector debug APK. Branch: $GITHUB_REF_NAME. Commit: $GITHUB_SHA. Version: $VERSION_NAME (build $VERSION_CODE). For testing only." \
               --prerelease
           fi
 

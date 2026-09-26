@@ -115,7 +115,7 @@ private fun RouteCollectorScreen() {
         updateCheckCount += 1
         updateStatus = "Checking GitHub… (#$updateCheckCount)"
         try {
-            val manifestConnection = (URL("https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json?check=$updateCheckCount").openConnection() as HttpURLConnection).apply {
+            val manifestConnection = (URL("https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json").openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
                 useCaches = false
                 setRequestProperty("Cache-Control", "no-cache")

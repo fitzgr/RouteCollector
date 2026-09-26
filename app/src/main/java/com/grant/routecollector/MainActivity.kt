@@ -13,6 +13,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONObject
 import java.io.File
+import kotlinx.coroutines.delay
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -103,7 +104,42 @@ private fun RouteCollectorScreen() {
     var updateWebUrl by remember { mutableStateOf<String?>(null) }
     var latestBuildLabel by remember { mutableStateOf<String?>(null) }
     var latestApkUrl by remember { mutableStateOf<String?>(null) }
+    val checkLatestUpdate: suspend () -> Unit = {
+        updateBusy = true
+        updateStatus = "Checking..."
+        try {
+            val connection = (URL("https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json").openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
+            }
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            connection.disconnect()
+            val json = JSONObject(body)
+            val code = json.getInt("versionCode")
+            val name = json.optString("versionName", code.toString())
+            val built = json.optString("buildTime", "")
+            latestBuildLabel = "$name • $built"
+            latestApkUrl = json.getString("apkUrl")
+            updateReady = code > BuildConfig.VERSION_CODE
+            updateStatus = if (updateReady) "Update ready" else "Waiting for newer build..."
+            updateWebUrl = null
+        } catch (_: Exception) {
+            updateReady = false
+            latestApkUrl = null
+            updateStatus = "Waiting for GitHub build..."
+            updateWebUrl = "https://github.com/fitzgr/RouteCollector/releases/tag/latest-debug"
+        }
+        updateBusy = false
+    }
+    LaunchedEffect(showSettings) {
+        if (showSettings) {
+            while (showSettings && !updateReady) {
+                checkLatestUpdate()
+                if (!updateReady) delay(15_000)
+            }
+        }
+    }
     var updateBusy by remember { mutableStateOf(false) }
+    var updateReady by remember { mutableStateOf(false) }
     val prefs = remember { context.getSharedPreferences("routecollector_overlay", android.content.Context.MODE_PRIVATE) }
     var visualAlerts by remember { mutableStateOf(prefs.getBoolean("visual_alerts_enabled", true)) }
     var cameraWarning by remember { mutableIntStateOf(prefs.getInt("red_light_camera_warning_metres", 200)) }
@@ -502,22 +538,8 @@ private fun RouteCollectorScreen() {
                         Text("Update: $updateStatus", style = MaterialTheme.typography.bodySmall)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = {
-                                if (!updateBusy) scope.launch {
-                                    updateBusy = true; updateStatus = "Checking..."
-                                    try {
-                                        val connection = (URL("https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json").openConnection() as HttpURLConnection).apply { instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000 }
-                                        val body = connection.inputStream.bufferedReader().use { it.readText() }; connection.disconnect()
-                                        val json = JSONObject(body)
-                                        val code = json.getInt("versionCode")
-                                        val name = json.optString("versionName", code.toString())
-                                        val built = json.optString("buildTime", "")
-                                        latestBuildLabel = "$name • $built"
-                                        latestApkUrl = json.getString("apkUrl")
-                                        updateStatus = if (code > BuildConfig.VERSION_CODE) "New version available" else "Up to date"
-                                    } catch (_: Exception) { updateStatus = "Open latest build to update"; updateWebUrl = "https://github.com/fitzgr/RouteCollector/releases/tag/latest-debug" }
-                                    updateBusy = false
-                                }
-                            }, enabled = !updateBusy) { Text("Check latest") }
+                                if (!updateBusy) scope.launch { checkLatestUpdate() }
+                            }, enabled = !updateBusy) { Text(if (updateBusy) "Checking..." else "Check now") }
                             Button(onClick = {
                                 val apkUrl = latestApkUrl
                                 if (apkUrl != null && !updateBusy) scope.launch {
@@ -533,7 +555,7 @@ private fun RouteCollectorScreen() {
                                     } catch (_: Exception) { updateStatus = "Download failed - GitHub sign-in may be required" }
                                     updateBusy = false
                                 }
-                            }, enabled = latestApkUrl != null && !updateBusy) { Text("Download update") }
+                            }, enabled = updateReady && latestApkUrl != null && !updateBusy) { Text("Update") }
                             updateWebUrl?.let { url ->
                                 Button(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }) { Text("Open latest build") }
                             }

@@ -20,6 +20,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.unit.sp
@@ -305,8 +307,16 @@ private fun RouteCollectorScreen() {
                     )
                     walkingCountdown?.let { Text("No GPS movement • auto-stop in ${it}s", style = MaterialTheme.typography.bodySmall, color = Color(0xFFB26A00)) }
                     cameraCaptureMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF2E7D32)) }
-                    Text("📍 Markers", style = MaterialTheme.typography.labelSmall, color = Color(0xFF607D8B))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .border(1.dp, Color(0xFFB7C9BD), RoundedCornerShape(12.dp))
+                            .background(Color(0xFFF4F8F5), RoundedCornerShape(12.dp))
+                            .padding(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("📍", fontSize = 22.sp)
+                        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {
                             val driveId = activeDriveId
                             if (driveId != null && !cameraCaptureBusy) {
@@ -354,9 +364,18 @@ private fun RouteCollectorScreen() {
                                 }
                             }
                         }, enabled = activeDriveId != null, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Text("🚸", fontSize = 29.sp, color = Color.Black) }
+                        }
                     }
-                    Text("Start / Stop zones", style = MaterialTheme.typography.labelSmall, color = Color(0xFF607D8B))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .border(1.dp, Color(0xFFB7C9BD), RoundedCornerShape(12.dp))
+                            .background(Color(0xFFF4F8F5), RoundedCornerShape(12.dp))
+                            .padding(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("▶■", style = MaterialTheme.typography.labelLarge, color = Color(0xFF546E5A))
+                        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(onClick = {
                             val driveId = activeDriveId
                             if (driveId != null) scope.launch {
@@ -417,6 +436,7 @@ private fun RouteCollectorScreen() {
                                 }
                             }
                         }, modifier = Modifier.weight(1.05f), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("passing" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) { Text(if ("passing" in activeZones) "Passing ■" else "Passing ▶", maxLines = 1) }
+                        }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             var speedMenu by remember { mutableStateOf(false) }

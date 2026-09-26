@@ -56,6 +56,7 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 import java.text.DateFormat
 import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -106,30 +107,50 @@ private fun RouteCollectorScreen() {
     var latestApkUrl by remember { mutableStateOf<String?>(null) }
     var updateBusy by remember { mutableStateOf(false) }
     var updateReady by remember { mutableStateOf(false) }
+    var updateCheckCount by remember { mutableIntStateOf(0) }
+    var updateLastCheckedAt by remember { mutableStateOf<Long?>(null) }
+    var latestBuildDuration by remember { mutableStateOf<String?>(null) }
     val checkLatestUpdate: suspend () -> Unit = {
         updateBusy = true
-        updateStatus = "Checking..."
+        updateCheckCount += 1
+        updateStatus = "Checking GitHub… (#$updateCheckCount)"
         try {
-            val connection = (URL("https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json").openConnection() as HttpURLConnection).apply {
+            val connection = (URL("https://api.github.com/repos/fitzgr/RouteCollector/releases/tags/latest-debug").openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
+                setRequestProperty("Accept", "application/vnd.github+json")
             }
-            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val releaseBody = connection.inputStream.bufferedReader().use { it.readText() }
             connection.disconnect()
+            val release = JSONObject(releaseBody)
+            val assets = release.getJSONArray("assets")
+            var manifestUrl: String? = null
+            for (i in 0 until assets.length()) {
+                val asset = assets.getJSONObject(i)
+                if (asset.optString("name") == "update.json") manifestUrl = asset.optString("browser_download_url")
+            }
+            val manifestConnection = (URL(manifestUrl ?: error("update.json missing")).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
+                setRequestProperty("Accept", "application/octet-stream")
+            }
+            val body = manifestConnection.inputStream.bufferedReader().use { it.readText() }
+            manifestConnection.disconnect()
             val json = JSONObject(body)
             val code = json.getInt("versionCode")
             val name = json.optString("versionName", code.toString())
             val built = json.optString("buildTime", "")
             latestBuildLabel = "$name • $built"
+            latestBuildDuration = json.optString("buildDuration", "").takeIf { it.isNotBlank() }
             latestApkUrl = json.getString("apkUrl")
             updateReady = code > BuildConfig.VERSION_CODE
-            updateStatus = if (updateReady) "Update ready" else "Waiting for newer build..."
+            updateStatus = if (updateReady) "Ready for download" else "Latest build already installed"
             updateWebUrl = null
         } catch (_: Exception) {
             updateReady = false
             latestApkUrl = null
-            updateStatus = "Waiting for GitHub build..."
+            updateStatus = "Check #$updateCheckCount: build not published yet"
             updateWebUrl = "https://github.com/fitzgr/RouteCollector/releases/tag/latest-debug"
         }
+        updateLastCheckedAt = System.currentTimeMillis()
         updateBusy = false
     }
     LaunchedEffect(showSettings) {
@@ -535,7 +556,11 @@ private fun RouteCollectorScreen() {
                         Text("Settings", style = MaterialTheme.typography.labelMedium)
                         Text("Installed: ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.bodySmall)
                         latestBuildLabel?.let { Text("Latest: $it", style = MaterialTheme.typography.bodySmall) }
+                        latestBuildDuration?.let { Text("Last build duration: $it", style = MaterialTheme.typography.bodySmall) }
                         Text("Update: $updateStatus", style = MaterialTheme.typography.bodySmall)
+                        updateLastCheckedAt?.let { checked ->
+                            Text("Last checked: " + java.text.SimpleDateFormat("h:mm:ss a", Locale.getDefault()).format(Date(checked)) + " • check #$updateCheckCount", style = MaterialTheme.typography.bodySmall)
+                        }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = {
                                 if (!updateBusy) scope.launch { checkLatestUpdate() }

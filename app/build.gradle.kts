@@ -20,9 +20,7 @@ android {
         // Use a timestamp-based version code so local sideloads and cloud builds share one
         // monotonically increasing version space. YYDDDHHmm fits safely in Android's Int
         // range through 2099 and lets a freshly built local APK update an older cloud APK.
-        val buildVersionCode = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)
-            .format(java.time.format.DateTimeFormatter.ofPattern("yyDDDHHmm"))
-            .toInt()
+        val buildVersionCode = (System.currentTimeMillis() / 60_000L - 28_000_000L).toInt()
         versionCode = buildVersionCode
         versionName = "0.1.$buildVersionCode"
     }

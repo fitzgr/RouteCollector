@@ -45,7 +45,9 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug
+        run: |
+          echo "BUILD_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+          ./gradlew assembleDebug
 
       - name: Verify APK signing certificate
         if: github.event_name != 'pull_request'
@@ -62,8 +64,11 @@ jobs:
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk routecollector-debug.apk
           BUILD_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          VERSION_CODE="$(date -u +'%y%j%H%M')"
-          printf '{"versionCode":%s,"versionName":"0.1.%s","buildTime":"%s","apkUrl":"https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/routecollector-debug.apk"}\n' "$VERSION_CODE" "$VERSION_CODE" "$BUILD_TIME" > update.json
+          BUILD_FINISHED_AT="$(date +%s)"
+          BUILD_SECONDS="$((BUILD_FINISHED_AT - BUILD_STARTED_AT))"
+          BUILD_DURATION="$((BUILD_SECONDS / 60))m $((BUILD_SECONDS % 60))s"
+          VERSION_CODE="$(( $(date -u +%s) / 60 - 28000000 ))"
+          printf '{"versionCode":%s,"versionName":"0.1.%s","buildTime":"%s","buildDuration":"%s","apkUrl":"https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/routecollector-debug.apk"}\n' "$VERSION_CODE" "$VERSION_CODE" "$BUILD_TIME" "$BUILD_DURATION" > update.json
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

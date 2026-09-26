@@ -17,8 +17,14 @@ android {
         applicationId = "com.grant.routecollector"
         minSdk = 29
         targetSdk = 35
-        versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1)
-        versionName = "0.1.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
+        // Use a timestamp-based version code so local sideloads and cloud builds share one
+        // monotonically increasing version space. YYDDDHHmm fits safely in Android's Int
+        // range through 2099 and lets a freshly built local APK update an older cloud APK.
+        val buildVersionCode = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)
+            .format(java.time.format.DateTimeFormatter.ofPattern("yyDDDHHmm"))
+            .toInt()
+        versionCode = buildVersionCode
+        versionName = "0.1.$buildVersionCode"
     }
 
     buildFeatures {

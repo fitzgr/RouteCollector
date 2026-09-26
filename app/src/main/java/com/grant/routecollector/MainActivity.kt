@@ -115,22 +115,10 @@ private fun RouteCollectorScreen() {
         updateCheckCount += 1
         updateStatus = "Checking GitHub… (#$updateCheckCount)"
         try {
-            val connection = (URL("https://api.github.com/repos/fitzgr/RouteCollector/releases/tags/latest-debug").openConnection() as HttpURLConnection).apply {
+            val manifestConnection = (URL("https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json?check=$updateCheckCount").openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
-                setRequestProperty("Accept", "application/vnd.github+json")
-            }
-            val releaseBody = connection.inputStream.bufferedReader().use { it.readText() }
-            connection.disconnect()
-            val release = JSONObject(releaseBody)
-            val assets = release.getJSONArray("assets")
-            var manifestUrl: String? = null
-            for (i in 0 until assets.length()) {
-                val asset = assets.getJSONObject(i)
-                if (asset.optString("name") == "update.json") manifestUrl = asset.optString("browser_download_url")
-            }
-            val manifestConnection = (URL(manifestUrl ?: error("update.json missing")).openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
-                setRequestProperty("Accept", "application/octet-stream")
+                useCaches = false
+                setRequestProperty("Cache-Control", "no-cache")
             }
             val body = manifestConnection.inputStream.bufferedReader().use { it.readText() }
             manifestConnection.disconnect()
@@ -147,7 +135,7 @@ private fun RouteCollectorScreen() {
         } catch (_: Exception) {
             updateReady = false
             latestApkUrl = null
-            updateStatus = "Check #$updateCheckCount: build not published yet"
+            updateStatus = "Check #$updateCheckCount: latest build not ready yet"
             updateWebUrl = "https://github.com/fitzgr/RouteCollector/releases/tag/latest-debug"
         }
         updateLastCheckedAt = System.currentTimeMillis()

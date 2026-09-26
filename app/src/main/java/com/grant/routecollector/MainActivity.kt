@@ -104,6 +104,8 @@ private fun RouteCollectorScreen() {
     var updateWebUrl by remember { mutableStateOf<String?>(null) }
     var latestBuildLabel by remember { mutableStateOf<String?>(null) }
     var latestApkUrl by remember { mutableStateOf<String?>(null) }
+    var updateBusy by remember { mutableStateOf(false) }
+    var updateReady by remember { mutableStateOf(false) }
     val checkLatestUpdate: suspend () -> Unit = {
         updateBusy = true
         updateStatus = "Checking..."
@@ -138,8 +140,6 @@ private fun RouteCollectorScreen() {
             }
         }
     }
-    var updateBusy by remember { mutableStateOf(false) }
-    var updateReady by remember { mutableStateOf(false) }
     val prefs = remember { context.getSharedPreferences("routecollector_overlay", android.content.Context.MODE_PRIVATE) }
     var visualAlerts by remember { mutableStateOf(prefs.getBoolean("visual_alerts_enabled", true)) }
     var cameraWarning by remember { mutableIntStateOf(prefs.getInt("red_light_camera_warning_metres", 200)) }

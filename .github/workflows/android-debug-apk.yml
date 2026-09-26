@@ -62,7 +62,8 @@ jobs:
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk routecollector-debug.apk
           BUILD_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          printf '{"versionCode":%s,"versionName":"0.1.%s","buildTime":"%s","apkUrl":"https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/routecollector-debug.apk"}\n' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_NUMBER" "$BUILD_TIME" > update.json
+          VERSION_CODE="$(date -u +'%y%j%H%M')"
+          printf '{"versionCode":%s,"versionName":"0.1.%s","buildTime":"%s","apkUrl":"https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/routecollector-debug.apk"}\n' "$VERSION_CODE" "$VERSION_CODE" "$BUILD_TIME" > update.json
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

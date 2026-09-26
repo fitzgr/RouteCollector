@@ -182,6 +182,16 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
             return false
         }
 
+        // A positive GPS speed is direct evidence that the vehicle is moving. Do not show
+        // the stationary countdown while speed is non-zero; continually move the anchor
+        // forward so the 10-minute timer can only begin after the vehicle actually stops.
+        if (actualSpeedKph != null && actualSpeedKph > 2f) {
+            noMovementAnchor = Location(location)
+            noMovementSinceElapsedRealtime = null
+            TrackingState.walkingAutoStopSeconds.value = null
+            return false
+        }
+
         val anchor = noMovementAnchor
         if (anchor == null) {
             noMovementAnchor = Location(location)

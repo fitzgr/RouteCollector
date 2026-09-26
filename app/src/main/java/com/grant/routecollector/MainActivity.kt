@@ -369,7 +369,7 @@ private fun RouteCollectorScreen() {
                                 cameraCaptureBusy = false
                             }
                             }
-                        }, enabled = activeDriveId != null && !cameraCaptureBusy, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("camera" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Text("📷", fontSize = 29.sp) }
+                        }, enabled = activeDriveId != null && !cameraCaptureBusy, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("camera" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Text("📷", fontSize = 29.sp) }
                         Button(onClick = {
                             val driveId = activeDriveId
                             if (driveId != null) scope.launch {
@@ -390,7 +390,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (paired) "Deer zone captured" else "Deer zone marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("deer" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Text("🦌", fontSize = 29.sp, color = Color(0xFF263238)) }
+                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("deer" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Text("🦌", fontSize = 29.sp, color = Color(0xFF263238)) }
                         Button(onClick = {
                             val driveId = activeDriveId
                             if (driveId != null) scope.launch {
@@ -399,7 +399,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt("Pedestrian crossing marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.wrapContentWidth().height(44.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Text("🚸", fontSize = 29.sp, color = Color.Black) }
+                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Text("🚸", fontSize = 29.sp, color = Color.Black) }
                         }
                     }
                     Row(
@@ -432,8 +432,8 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Community safety end marked" else "Community safety start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(1.15f), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("community" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) {
-                            Text(if ("community" in activeZones) "Community ■" else "Community ▶")
+                        }, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("community" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) {
+                            Text("Community", maxLines = 1)
                         }
                         Button(onClick = {
                             val driveId = activeDriveId
@@ -455,8 +455,8 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Senior safety end marked" else "Senior safety start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(0.90f), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("senior" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) {
-                            Text(if ("senior" in activeZones) "Senior ■" else "Senior ▶")
+                        }, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("senior" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) {
+                            Text("Senior", maxLines = 1)
                         }
                         Button(onClick = {
                             val driveId = activeDriveId
@@ -471,7 +471,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Passing zone end marked" else "Passing zone start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(1.05f), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("passing" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) { Text(if ("passing" in activeZones) "Passing ■" else "Passing ▶", maxLines = 1) }
+                        }, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("passing" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) { Text("Passing", maxLines = 1) }
                         }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

@@ -87,6 +87,26 @@ jobs:
               --prerelease
           fi
 
+      - name: Verify published updater assets
+        if: github.event_name != 'pull_request'
+        run: |
+          MANIFEST_URL="https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json"
+          APK_URL="https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/routecollector-debug.apk"
+          for attempt in 1 2 3 4 5 6; do
+            if curl --fail --location --silent --show-error --header "Cache-Control: no-cache" "$MANIFEST_URL?run=$GITHUB_RUN_ID" -o published-update.json \
+              && grep -q '"versionCode"' published-update.json \
+              && curl --fail --location --silent --show-error --range 0-3 "$APK_URL?run=$GITHUB_RUN_ID" -o published-apk-prefix \
+              && test "$(od -An -tx1 -N2 published-apk-prefix | tr -d ' \n')" = "504b"; then
+              echo "Published updater manifest and APK are live."
+              cat published-update.json
+              exit 0
+            fi
+            echo "Updater assets not live yet; retrying in 5 seconds..."
+            sleep 5
+          done
+          echo "Published updater assets could not be verified."
+          exit 1
+
       - name: Upload Route Collector debug APK artifact
         continue-on-error: true
         uses: actions/upload-artifact@v4

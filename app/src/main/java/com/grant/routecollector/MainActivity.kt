@@ -113,41 +113,68 @@ private fun RouteCollectorScreen() {
     val checkLatestUpdate: suspend () -> Unit = {
         updateBusy = true
         updateCheckCount += 1
-        updateStatus = "Checking GitHub… (#$updateCheckCount)"
+        updateStatus = "Comparing installed version with GitHub…"
         try {
-            val manifestConnection = (URL("https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json").openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
-                useCaches = false
-                setRequestProperty("Cache-Control", "no-cache")
+            var keepMonitoring = true
+            while (keepMonitoring && showSettings) {
+                val manifestUrl = "https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json?check=" + System.currentTimeMillis()
+                val manifestConnection = (URL(manifestUrl).openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
+                    useCaches = false
+                    setRequestProperty("Cache-Control", "no-cache, no-store")
+                }
+                val body = manifestConnection.inputStream.bufferedReader().use { it.readText() }
+                manifestConnection.disconnect()
+                val json = JSONObject(body)
+                val code = json.getInt("versionCode")
+                val name = json.optString("versionName", code.toString())
+                val built = json.optString("buildTime", "")
+                latestBuildLabel = "$name • $built"
+                latestBuildDuration = json.optString("buildDuration", "").takeIf { it.isNotBlank() }
+                latestApkUrl = json.getString("apkUrl")
+                updateReady = code > BuildConfig.VERSION_CODE
+                updateWebUrl = null
+
+                if (updateReady) {
+                    updateStatus = "New GitHub build available: $name (build $code)"
+                    keepMonitoring = false
+                } else {
+                    updateStatus = "Installed build ${BuildConfig.VERSION_CODE} is in sync with GitHub build $code. Checking Actions…"
+                    val actionsUrl = "https://api.github.com/repos/fitzgr/RouteCollector/actions/runs?branch=feature/google-maps-overlay&per_page=10&check=" + System.currentTimeMillis()
+                    val actionsConnection = (URL(actionsUrl).openConnection() as HttpURLConnection).apply {
+                        instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
+                        useCaches = false
+                        setRequestProperty("Accept", "application/vnd.github+json")
+                        setRequestProperty("Cache-Control", "no-cache, no-store")
+                    }
+                    val actionsBody = actionsConnection.inputStream.bufferedReader().use { it.readText() }
+                    actionsConnection.disconnect()
+                    val runs = JSONObject(actionsBody).getJSONArray("workflow_runs")
+                    var activeCount = 0
+                    for (i in 0 until runs.length()) {
+                        val run = runs.getJSONObject(i)
+                        if (run.optString("event") == "push" && run.optString("status") != "completed") activeCount += 1
+                    }
+                    if (activeCount > 0) {
+                        updateStatus = "GitHub Actions building ($activeCount active). Monitoring…"
+                        delay(10_000)
+                    } else {
+                        updateStatus = "In sync — installed build ${BuildConfig.VERSION_CODE} matches latest GitHub build $code. No build running."
+                        keepMonitoring = false
+                    }
+                }
             }
-            val body = manifestConnection.inputStream.bufferedReader().use { it.readText() }
-            manifestConnection.disconnect()
-            val json = JSONObject(body)
-            val code = json.getInt("versionCode")
-            val name = json.optString("versionName", code.toString())
-            val built = json.optString("buildTime", "")
-            latestBuildLabel = "$name • $built"
-            latestBuildDuration = json.optString("buildDuration", "").takeIf { it.isNotBlank() }
-            latestApkUrl = json.getString("apkUrl")
-            updateReady = code > BuildConfig.VERSION_CODE
-            updateStatus = if (updateReady) "Ready for download" else "Latest build already installed"
-            updateWebUrl = null
         } catch (_: Exception) {
             updateReady = false
             latestApkUrl = null
-            updateStatus = "Check #$updateCheckCount: latest build not ready yet"
+            updateStatus = "Could not complete GitHub update check"
             updateWebUrl = "https://github.com/fitzgr/RouteCollector/releases/tag/latest-debug"
         }
         updateLastCheckedAt = System.currentTimeMillis()
         updateBusy = false
     }
     LaunchedEffect(showSettings) {
-        if (showSettings) {
-            while (showSettings && !updateReady) {
-                checkLatestUpdate()
-                if (!updateReady) delay(15_000)
-            }
-        }
+        if (showSettings) checkLatestUpdate()
     }
     val prefs = remember { context.getSharedPreferences("routecollector_overlay", android.content.Context.MODE_PRIVATE) }
     var visualAlerts by remember { mutableStateOf(prefs.getBoolean("visual_alerts_enabled", true)) }

@@ -16,6 +16,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.util.Log
 import android.view.KeyEvent
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
@@ -222,10 +223,25 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private fun defaultTolerance(speed: Int): Int = if (speed >= 100) 9 else 8
     private fun getSpeedTolerance(speed: Int): Int = getSharedPreferences(PREFS, MODE_PRIVATE).getInt("$PREF_SPEED_TOLERANCE_PREFIX$speed", defaultTolerance(speed))
     private fun checkOverSpeedThreshold(actualSpeedKph: Float?) {
-        val posted = TrackingState.currentPostedSpeed.value ?: run { overSpeedAlertActive = false; TrackingState.overSpeedActive.value = false; return }
-        val actual = actualSpeedKph ?: run { overSpeedAlertActive = false; TrackingState.overSpeedActive.value = false; return }
-        val threshold = posted + getSpeedTolerance(posted)
-        if (!overSpeedAlertActive && actual > threshold) {
+        val posted = TrackingState.currentPostedSpeed.value ?: run {
+            overSpeedAlertActive = false
+            TrackingState.overSpeedActive.value = false
+            return
+        }
+        // Use the same live GPS sample that is published as "Actual" in the UI.
+        val actual = actualSpeedKph ?: run {
+            overSpeedAlertActive = false
+            TrackingState.overSpeedActive.value = false
+            return
+        }
+        val tolerance = getSpeedTolerance(posted)
+        val threshold = posted + tolerance
+        val shouldWarn = actual > threshold
+        Log.d(
+            "RouteCollectorSpeed",
+            "posted=$posted tolerance=$tolerance threshold=$threshold actual=${"%.1f".format(Locale.US, actual)} warn=$shouldWarn active=$overSpeedAlertActive"
+        )
+        if (!overSpeedAlertActive && shouldWarn) {
             overSpeedAlertActive = true
             TrackingState.overSpeedActive.value = true
             warningTone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 300)

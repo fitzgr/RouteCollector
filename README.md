@@ -1,227 +1,480 @@
-# Route Collector — Android MVP
+# Route Collector — Android
 
-Route Collector records road facts on repeat routes while Google Maps remains available for navigation. Collected facts can be used on later drives for direction-aware speed, safety-zone, deer-crossing, and red-light-camera alerts, with longer-term plans for route-aware vehicle integrations.
+Route Collector is a road-fact collection and repeat-route driving companion for Android. It records GPS drives, lets a tester capture road features with very little interaction, and reuses those collected facts on later trips for direction-aware spoken and visual alerts.
 
-## Current driving workflow
+The app is deliberately separate from the navigation engine: Google Maps can remain the driver's navigation app while Route Collector runs its foreground tracking service and floating controls. Route Collector also has its own OpenStreetMap/osmdroid map for live route context and recorded-drive review.
 
-1. Open Route Collector and tap **Start drive**.
-2. Open **Google Maps + overlay**.
-3. Navigate normally while Route Collector records GPS breadcrumbs, observed speed, and travel direction in the background.
-4. Use the floating overlay to capture road facts without leaving Google Maps.
-5. On later drives, Route Collector recognizes collected facts and provides spoken/visual alerts where applicable.
+> Route Collector is a development/road-testing tool. Its alerts are informational only. The driver remains responsible for posted signs, traffic signals, road conditions, legal speed, and safe operation of the vehicle.
 
-## Floating Google Maps overlay
+## What is built
 
-The compact overlay is designed for road testing and currently provides:
+Current functionality includes:
 
-- Current **Posted** or **Collected** speed source and **Actual** GPS speed, with the speed Clear action on the same row.
-- Configurable over-speed warning tolerance.
-- Primary quick actions ordered **🚦 📷 → 🦌 🚸 → Speed**, using compact icon-only camera and deer-crossing buttons.
-- Collapsible speed-marker controls.
-- Community safety-zone start/end controls.
-- Senior safety-zone start/end controls.
-- An **Active zones** panel with clear/delete actions where applicable.
-- **Undo** for the latest marker.
-- Collapsible **⚙ Settings**.
-- Spoken acknowledgements and optional visual alerts.
-- A separate marker-map overlay for reviewing nearby collected road facts while testing.
+- Foreground GPS drive recording with latitude, longitude, timestamp, accuracy, speed and travel bearing.
+- Manual **Start / Stop** plus automatic driving start after sustained valid driving fixes.
+- Automatic stop after driving has been established and there has been about **10 continuous minutes with no meaningful position movement**.
+- A compact collector UI plus floating overlay intended to coexist with Google Maps.
+- Live **Posted / Collected / Actual** speed information.
+- OpenStreetMap road-speed lookup when a collected speed fact is not active.
+- Direction-aware speed-limit facts and advance signs.
+- Per-speed overspeed tolerances based on the live GPS **Actual** speed.
+- Red-light-camera collection with intersection snapping.
+- Deer-area endpoint pairing and direction-aware entry/exit behavior.
+- Pedestrian-crossing collection and approach warnings.
+- Community safety zones.
+- Senior safety zones.
+- Directional passing zones.
+- Spoken Text-to-Speech acknowledgements and alerts.
+- Optional visual alerts.
+- Active-zone controls for clearing/removing collected facts.
+- Undo of the latest marker.
+- Recorded-drive history (latest 10 drives).
+- OpenStreetMap live/recorded route display.
+- Local JSON export.
+- In-app build/version checking and GitHub debug APK updating.
+- GitHub Actions cloud builds signed with the same development certificate used by the established test installation.
 
-## Speed-zone collection and alerts
+---
 
-The **Speed** panel supports posted speeds of 30, 40, 50, 60, 70, 80, 90, 100, and 110 km/h. Opening **Speed** preselects the current Posted/Collected speed (fallback 60 km/h) and resets the marker type to **Zone begins**. The selected speed remains visible while the panel is open. A tester records either:
+## Driving workflow
 
-- **Zone begins** — the actual boundary where the new posted limit starts; or
-- **Advance sign** — the earlier sign warning that a different limit is coming.
+1. Start Route Collector, or allow its driving detection to start a drive after sustained valid movement.
+2. Keep Route Collector visible or use its floating collector while Google Maps provides navigation.
+3. Route Collector records the drive in the background.
+4. Tap a marker control when a real road fact is encountered.
+5. Route Collector stores the position, type and — where relevant — travel direction and pairing information.
+6. On later drives, the tracking service evaluates upcoming facts against current position and direction and provides the appropriate alert.
 
-Route Collector stores these separately as `speed` and `speed_advance` markers.
+The design goal is to make **collection quick while driving** and make later playback largely passive.
 
-### Direction-aware speed facts
+---
 
-Speed markers use the vehicle's travel direction when they were collected. On later drives, Route Collector compares the current travel bearing with the marker direction so a speed marker intended for the opposite direction does not normally change the active posted speed.
+## Collector layout
 
-- Same-direction advance markers can announce **Speed reduction to <limit> ahead**.
-- A lower upcoming speed zone can produce an advance **Speed reduction to <limit>** warning.
-- At the zone boundary, the new speed becomes active and can announce **<limit> kilometre zone active**.
-- Opposite-direction speed markers are treated as informational rather than changing the active speed.
-- The active speed zone can be manually cleared from the overlay.
+The primary road-fact controls are grouped by how the facts behave.
 
-If no collected speed zone is active, Route Collector can attempt to initialize the posted speed from OpenStreetMap road data. A manually cleared zone is not immediately repopulated by that lookup.
+### Markers
 
-## Posted versus actual speed
+Point-like observations:
 
-The overlay compares GPS-observed vehicle speed with the current posted limit.
+- **📷 Camera**
+- **🦌 Deer**
+- **🚸 Pedestrian**
 
-Default warning tolerances are:
+### Start / Stop zones
 
-- posted speed below 100 km/h: **+8 km/h**;
-- posted speed 100 km/h or higher: **+9 km/h**.
-
-Each supported posted speed has its own user-editable tolerance under **⚙ Settings**, adjustable from 0 to +20 km/h in 1 km/h steps. When actual speed crosses the configured threshold, the overlay highlights the condition and the tracking service can speak **Speed threshold exceeded**.
-
-These are notification thresholds only; Route Collector does not control vehicle speed.
-
-## Deer crossing zones
-
-The overlay includes a one-tap **🦌 Deer entering** action.
-
-The collection model is intentionally simple while driving:
-
-1. Mark **Deer entering** when entering a known deer-crossing area from one direction.
-2. On a drive through the same area in the opposite direction, mark **Deer entering** at that direction's entrance.
-3. Route Collector stores the travel bearing with each marker and can pair opposite-direction endpoints when they are within the supported pairing distance and their bearings indicate opposing travel directions.
-
-Once a pair is recognized, later drives can distinguish the boundary by travel direction and announce:
-
-- **Entering deer crossing area**
-- **Leaving deer crossing area**
-
-The marker-map overlay displays deer boundaries with a dedicated **D** marker.
-
-## Community and senior safety zones
-
-The overlay provides separate start/end controls for:
+Features that describe an area or directional segment:
 
 - **Community safety zone**
 - **Senior safety zone**
+- **Passing zone**
 
-On later drives, recognized boundaries can announce:
+### Speed
 
-- **Entering community safety zone**
-- **Leaving community safety zone**
-- **Entering senior safety zone**
-- **Leaving senior safety zone**
+Speed controls remain directly available below the zone controls:
 
-The **Active zones** panel shows currently active safety zones. A zone can be cleared by recording its end, and a mistaken nearby safety-zone pair can be deleted from the overlay.
+- posted speed selector;
+- **Zone begins / Advance sign** selector;
+- **Set**.
 
-Legacy school-zone marker types remain readable as community-safety-zone facts.
+Supported manually collected speeds are **30 through 110 km/h in 10 km/h steps**.
+
+Changing the selector alone does not record a GPS marker. The selected value becomes a road fact only when **Set** is tapped.
+
+---
+
+# Road-fact and zone behaviour
+
+The road-fact types are intentionally different. A camera is not treated like a speed zone, and a deer area is not treated like a community safety zone.
+
+## Speed zones
+
+Two speed facts can be collected.
+
+### Zone begins
+
+A **Zone begins** marker records the point where a posted speed actually takes effect.
+
+Stored marker type:
+
+`speed`
+
+When approached later in the appropriate direction, the new speed becomes the active collected posted speed at the boundary and can announce:
+
+> “<limit> kilometre zone active”
+
+### Advance sign
+
+An **Advance sign** records an earlier sign telling the driver that a different speed is coming.
+
+Stored marker type:
+
+`speed_advance`
+
+An advance marker does **not** immediately replace the active posted speed. It is used to warn about the upcoming change, particularly a reduction.
+
+### Direction handling
+
+Speed facts save the travel bearing present when they are captured. Playback compares that bearing with current travel direction.
+
+This prevents a speed marker collected for the opposite carriageway/direction from normally changing the current active limit.
+
+A significant turn can clear the collected road-speed context so the app does not carry a directional speed fact onto a different road. Route Collector can then request a fresh OpenStreetMap posted-speed value.
+
+A manually cleared collected speed is also prevented from being immediately reintroduced as though it were still active.
+
+---
+
+## Posted, Collected and Actual speed
+
+These values mean different things:
+
+- **Posted** — the current road limit obtained from OpenStreetMap when available.
+- **Collected** — a Route Collector speed fact that has become active and is authoritative for that collected road segment.
+- **Actual** — the vehicle's current real-time GPS speed.
+
+The overspeed alert is evaluated against **Actual**, not against another calculated/display value.
+
+For example, with an 80 km/h posted speed and a +8 km/h tolerance, the alert condition is:
+
+`Actual GPS speed > 88 km/h`
+
+The service logs the posted speed, tolerance, resulting threshold, live actual speed and warning decision for road-test diagnosis.
+
+### Default tolerances
+
+- Below 100 km/h: **+8 km/h**
+- 100 km/h and above: **+9 km/h**
+
+Each supported speed has its own locally stored tolerance, adjustable from **0 to +20 km/h**.
+
+After an overspeed warning has become active, recovery uses a **2 km/h hysteresis** so the alert does not chatter on/off around one exact GPS reading. Returning sufficiently below the threshold produces the short recovery indication and spoken **“Good”**.
+
+---
+
+## Deer crossing areas
+
+Deer areas are collected from the driver's perspective with a simple **entering** action.
+
+The driver marks an entrance while travelling one direction. On a later pass in the opposite direction, the entrance at the other end can also be marked. Route Collector uses location and opposing travel bearings to associate the endpoints into a deer area.
+
+This lets the same two physical endpoints mean different things depending on direction:
+
+- approaching an endpoint in its recorded direction → **entering the deer area**;
+- approaching the opposite endpoint from inside the paired area → **leaving the deer area**.
+
+The active deer state appears in **Active zones** and can be cleared. A collected deer endpoint or its paired area can also be deleted.
+
+During the higher-risk night period — from approximately **30 minutes before local sunset through 30 minutes after local sunrise** — the entry message can additionally remind the driver to use high beams when safe.
+
+This is deliberately different from a generic point warning: the paired endpoints describe an **area with an entrance and exit**.
+
+---
+
+## Pedestrian crossings
+
+A pedestrian crossing is a point feature.
+
+Stored marker type:
+
+`pedestrian_crossing`
+
+Unlike camera collection, the pedestrian marker is stored at the **exact GPS position at which it is captured** rather than being snapped to a nearby intersection.
+
+Pedestrian crossings are treated as bidirectional road facts. The warning distance adapts to speed and is constrained to approximately **120–350 metres**.
+
+The map uses a dedicated 🚸 representation.
+
+---
+
+## Community safety zones
+
+Community safety zones have explicit **start** and **end** boundaries.
+
+Marker types include:
+
+`community_safety_zone_start`  
+`community_safety_zone_end`
+
+The current active state is shown in the **Active zones** panel.
+
+Playback can announce entering and leaving the zone. During configured school-activity periods, the community-zone entry alert can additionally call attention to children.
+
+Current weekday school-activity windows used by the app are:
+
+- 7:30–9:30
+- 11:00–13:30
+- 14:00–16:30
+
+Older school-zone marker types remain readable for compatibility.
+
+A community zone can be:
+
+- ended normally by recording its end;
+- **cleared** from the current active state; or
+- **deleted** as a nearby paired collected zone when the capture was wrong.
+
+---
+
+## Senior safety zones
+
+Senior safety zones use the same start/end concept as community zones but remain a separate semantic zone type.
+
+Marker types:
+
+`senior_safety_zone_start`  
+`senior_safety_zone_end`
+
+They can announce entry/exit, appear independently in **Active zones**, and can be cleared or have their nearby paired markers deleted.
+
+Keeping senior and community zones separate allows their presentation and future warning behaviour to evolve independently.
+
+---
+
+## Passing zones
+
+Passing zones are **directional paired start/end road segments**.
+
+They are not treated as generic point markers. The direction in which the zone was captured matters, allowing the app to avoid applying the same directional passing-zone state indiscriminately to opposing travel.
+
+On entry in the recorded direction, the app can warn the driver to be aware of oncoming traffic.
+
+---
 
 ## Red-light cameras
 
-The **🚦 Camera** quick action records a red-light-camera observation.
+Red-light-camera collection is intersection-oriented rather than simply storing raw phone GPS.
 
-When a camera is marked, Route Collector asks OpenStreetMap/Overpass for nearby named roads and attempts to snap the marker to the centre of the nearest intersection rather than blindly storing the phone's raw GPS position.
+When **Camera** is tapped, Route Collector uses nearby OpenStreetMap/Overpass road information to find a plausible intersection and attempts to snap the camera fact to the intersection centre.
 
-- The original observed GPS position is retained in the marker note.
-- If an intersection cannot be resolved confidently, the marker remains at the observed GPS position and reports that the intersection was not confirmed.
-- When an intersection is resolved, its name is included in the acknowledgement.
-- Previously collected legacy `camera` markers remain readable.
-- The warning distance is configurable from **100–500 m** in 50 m steps; default is **200 m**.
-- Previously collected cameras can trigger an approaching-camera warning.
-- Near a known camera, Route Collector shows a temporary **Remove camera** action; if it is not used, it disappears automatically after the intersection.
+The capture retains the observed position in its metadata so the original GPS observation is not lost.
 
-## Spoken and visual driver alerts
+If a confident intersection cannot be established, the marker remains at the observed location instead of inventing an intersection.
 
-Route Collector uses Android Text-to-Speech for automatic route alerts and spoken capture acknowledgements. Current automatic alert categories include:
+Existing legacy `camera` facts remain readable alongside `red_light_camera`.
 
-```text
-Speeding
-Reduce to <limit> ahead
-Reduce to <limit>
-<limit> kilometre zone active
-Deer crossing area
-Leaving deer area
-Entering community zone
-Leaving community zone
-Entering senior zone
-Leaving senior zone
-Red-light-camera approach / verification alerts
-```
+### Camera playback
 
-Capture actions also provide spoken acknowledgements for speed markers, deer points/pairs, safety-zone boundaries, camera marking/verification, clearing/deleting zones, undo, and export operations.
+- Configurable approach-warning distance: **100–500 m**, default **200 m**.
+- Camera facts are not dependent on having captured the exact same travel direction.
+- Approaching a known camera can produce a spoken warning.
+- Near the camera, Route Collector exposes contextual **Keep / Remove** verification.
+- The camera state is reflected in the Active zones/road-alert UI while relevant.
 
-When music is active, spoken prompts pause playback, wait about 250 ms, speak at full TTS prompt volume, and resume playback when speech finishes. Visual alerts can be disabled independently while spoken alerts remain available. The overlay uses a dark alert surface and does not intentionally wake or brighten the screen.
+The live map uses a dedicated camera pin.
 
-## Direction and GPS tracking
+---
 
-While a drive is active, Route Collector records:
+# Spoken and visual alerts
+
+Route Collector uses Android Text-to-Speech for both collection acknowledgements and automatic road alerts.
+
+Examples include:
+
+- speed reduction ahead;
+- speed-zone activation;
+- overspeed warning and recovery;
+- deer-area entry/exit;
+- community-zone entry/exit;
+- senior-zone entry/exit;
+- pedestrian crossing;
+- passing-zone warning;
+- red-light-camera approach;
+- marker captured/deleted/cleared acknowledgements.
+
+When music is playing, Route Collector can pause playback, allow a short delay for the spoken prompt, speak, and resume music when the prompt sequence finishes.
+
+Visual alerts can be switched off independently.
+
+---
+
+# GPS, direction and drive lifecycle
+
+While a drive is active Route Collector records GPS breadcrumb points containing:
 
 - timestamp;
-- latitude and longitude;
-- GPS accuracy;
-- GPS-observed speed; and
-- current travel bearing when available.
+- latitude;
+- longitude;
+- accuracy;
+- GPS-observed speed.
 
-Travel bearing comes from GPS bearing when available and can fall back to movement between recent locations. Direction is used to distinguish road facts that apply to the current direction of travel from markers collected for the opposite direction.
+The service also maintains current travel bearing. GPS-provided bearing is preferred when available; movement between recent valid locations can provide a fallback.
 
-## Automatic stopped-drive backup
+Direction is used by features such as speed facts, deer boundaries and passing zones.
 
-If Route Collector detects that the vehicle has remained below the driving-speed threshold for approximately **10 minutes**, it can automatically export the route data, end the drive, and stop the tracking/overlay services. This protects collected test data if a drive is left running after arrival.
+## Automatic start
 
-## Settings
+When Route Collector is not already recording and location permission is available, sustained accurate driving fixes at driving speed can automatically start a drive.
 
-The compact **⚙ Settings** panel stores preferences locally and currently includes:
+This avoids requiring a manual Start every time.
 
-- **Visual alerts ON/OFF**.
-- **Red-light camera warning distance**, 100–500 m in 50 m increments.
-- **Over-speed warning tolerance** for each supported posted speed.
-- **Export route data** to Android Downloads.
+## Automatic stop
 
-Settings persist without rebuilding the app.
+Auto-stop is deliberately **position based**, not simply “speed is low.”
 
-## Data export
+After real driving has been confirmed, Route Collector watches for meaningful GPS position movement. Approximately **10 continuous minutes without meaningful movement** can end the drive.
 
-Route Collector exports a JSON backup to the Android Downloads folder. The export includes drives, GPS breadcrumb points, and collected markers using the `routecollector-export-v1` format.
+Meaningful movement clears the pending stationary timer. A live GPS speed above the stationary range also prevents a contradictory “no movement” countdown from being shown.
 
-Cloud synchronization, multi-user merge rules, confidence scoring, and shared-vs-private data layers are intentionally deferred and tracked in `BACKLOG.md`.
+---
 
-## Map display
+# Active zones and correction tools
 
-Recorded drives can be displayed using OpenStreetMap/osmdroid. The floating marker-map overlay provides a compact road-testing view of collected facts, including speed markers, red-light cameras, safety-zone boundaries, and deer-zone boundaries.
+The **Active zones** section is the driver's current road-context summary.
 
-Red-light cameras use a dedicated traffic-light/camera representation and deer boundaries use a dedicated **D** marker.
+Depending on what is active it can show:
 
-## Data model
+- current speed;
+- community safety;
+- senior safety;
+- deer area;
+- red-light camera.
 
-- `DriveEntity` — one recorded trip.
-- `TrackPointEntity` — timestamp, latitude, longitude, GPS accuracy, and observed speed.
-- `MarkerEntity` — collected geographic facts.
+Actions are context dependent:
 
-Current marker types include:
+- **Clear** changes the current active state without necessarily deleting the underlying road fact.
+- **Delete** removes the relevant collected marker/pair where supported.
+- **Remove** is used for camera correction.
+- **Undo** removes the latest marker from the current drive.
 
-```text
-speed
-speed_advance
-red_light_camera
-deer_zone_enter
-community_safety_zone_start
-community_safety_zone_end
-senior_safety_zone_start
-senior_safety_zone_end
-```
+That distinction matters: clearing a state and deleting collected geographic data are intentionally not the same operation.
 
-Older marker types remain readable for compatibility with earlier builds.
+---
 
-## Local build/install
+# Map and drive history
 
-Build a debug APK with:
+Route Collector uses **osmdroid/OpenStreetMap** for its own map.
+
+During a live drive:
+
+- the vehicle remains horizontally centred;
+- it is positioned at roughly **67% of the map height from the top** (about one-third up from the bottom);
+- more map is therefore visible in the direction of travel;
+- the map rotates with travel direction;
+- zoom changes with driving speed;
+- upcoming relevant markers are shown on the map;
+- active zone context is visually indicated around the current vehicle position.
+
+Marker representations distinguish cameras, pedestrian crossings, deer points, safety zones and speed facts.
+
+## Recorded drives
+
+The app retains the latest **10 drives** for quick history.
+
+Selecting a recorded drive displays its route fitted to the map with **Start** and **End** markers plus the road facts associated with that drive.
+
+---
+
+# Data storage and export
+
+Route Collector uses Room/SQLite locally.
+
+Core entities:
+
+- **DriveEntity** — one drive/session.
+- **TrackPointEntity** — GPS breadcrumb data.
+- **MarkerEntity** — a collected geographic road fact.
+
+The app can export its data to Android Downloads as JSON using the `routecollector-export-v1` format.
+
+The existing app database is intentionally preserved when installing development updates over the existing package with ADB `install -r`.
+
+Cloud/community synchronization and multi-user merge/confidence models are not part of the current local MVP; related future work belongs in `BACKLOG.md`.
+
+---
+
+# Settings
+
+Current local settings include:
+
+- Visual alerts on/off.
+- Red-light-camera warning distance.
+- Per-posted-speed overspeed tolerance.
+- Route-data export.
+- Installed/latest build information.
+- GitHub update checking and installation.
+
+Preferences persist locally.
+
+---
+
+# In-app build/update checker
+
+The Settings panel displays the **installed version name/build number** and checks the stable GitHub `latest-debug` publication.
+
+The checker now follows this sequence:
+
+1. Read the latest published GitHub build metadata.
+2. Compare its actual APK build version with `BuildConfig.VERSION_CODE` installed on the phone.
+3. If the GitHub build is newer, report that an update is available and enable **Update**.
+4. If the two builds are in sync, explicitly report that state.
+5. Check GitHub Actions for an active push build.
+6. If a build is queued/in progress, show that Actions is building and monitor it.
+7. Recheck every 10 seconds while the build remains active.
+8. Once Actions completes, re-read the published build metadata and either offer the new APK or report that the phone remains in sync.
+
+Requests use cache-busting/no-cache behaviour so a stale `update.json` is less likely to masquerade as the current release.
+
+The published `update.json` takes its `versionCode` and `versionName` directly from the **built APK's Gradle output metadata**. It does not independently invent a second timestamp version during publication.
+
+This is important because Android will reject an APK whose version code is lower than the installed package.
+
+---
+
+# GitHub Actions build pipeline
+
+Workflow:
+
+`.github/workflows/android-debug-apk.yml`
+
+Pushes to `main` and `feature/google-maps-overlay` build the debug APK.
+
+For trusted non-PR builds the workflow:
+
+1. checks out the repository;
+2. configures JDK 17 and Gradle caching;
+3. restores the development debug keystore from the GitHub secret;
+4. builds the APK;
+5. verifies the expected signing-certificate SHA-256;
+6. reads the APK's actual Gradle version metadata;
+7. publishes/updates the stable `latest-debug` prerelease;
+8. publishes `routecollector-debug.apk` and `update.json`;
+9. verifies that the updater assets are live;
+10. uploads a temporary Actions artifact when artifact quota permits.
+
+Pull-request runs build/test the branch but skip trusted signing/release publication.
+
+---
+
+# Local build and install
+
+For a PowerShell session:
 
 ```powershell
-.\gradlew assembleDebug
+git pull
+.\gradlew clean assembleDebug
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r ".\app\build\outputs\apk\debug\app-debug.apk"
 ```
 
-Build and install directly to an attached Android device with:
+For a reusable Windows `.cmd` file, remember that PowerShell's `$env:` syntax and leading `&` do not apply. Also use `call` for the Gradle batch file so control returns to the script:
 
-```powershell
-.\gradlew installDebug
+```bat
+@echo off
+git pull
+call gradlew.bat clean assembleDebug
+
+"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe" install -r "app\build\outputs\apk\debug\app-debug.apk"
+
+pause
 ```
 
-Or install an already-built APK with ADB:
-
-```powershell
-& "C:\Users\Grant\AppData\Local\Android\Sdk\platform-tools\adb.exe" install -r ".\app\build\outputs\apk\debug\app-debug.apk"
-```
+The `-r` installation updates the existing package in place and preserves its application data, provided Android accepts the version/signature.
 
 The app targets Android 10+ (API 29+) and compile/target SDK 35.
 
-## GitHub Actions cloud build
+---
 
-The repository includes `.github/workflows/android-debug-apk.yml`.
-
-Pushes to `main` or `feature/google-maps-overlay` trigger a cloud debug APK build. Trusted branch builds restore the repository's private debug-signing secret so the cloud APK can update the same installed development app used by local Android Studio builds.
-
-The latest successful cloud build is published to the stable prerelease tag `latest-debug` as `routecollector-debug.apk`, while the normal Actions artifact is also retained temporarily.
-
-## Stack
+# Technology stack
 
 - Kotlin
 - Jetpack Compose
@@ -229,45 +482,50 @@ The latest successful cloud build is published to the stable prerelease tag `lat
 - Google Fused Location Provider
 - Android foreground location service
 - Android Text-to-Speech
-- Android audio focus for spoken acknowledgements
+- Android media controls
 - osmdroid / OpenStreetMap
-- OpenStreetMap Overpass API for intersection snapping
-- GitHub Actions for cloud debug APK builds
+- OpenStreetMap Overpass data
+- GitHub Actions
 
-## Important phone settings
+---
 
-Some Android devices, including Samsung phones, can aggressively sleep background apps. For reliable road recording, set Route Collector to **Unrestricted** battery use after installation.
+# Important Android settings
 
-The floating collector and marker-map overlays also require Android permission to display over other apps.
+For reliable background road testing:
 
-## Development direction
+- grant precise/fine location permission;
+- allow notifications where Android requires them for foreground-service visibility;
+- grant display-over-other-apps permission when using the floating overlay;
+- on phones with aggressive battery management, such as many Samsung devices, set Route Collector to **Unrestricted** battery use.
 
-Current work is focused on making road-fact collection and playback reliable enough for repeat-route testing. Likely follow-on work includes:
+Do not uninstall the development app merely to resolve an update problem if its local Room data needs to be preserved. Diagnose version/signature/install errors and update the package in place instead.
 
-- Import of exported Route Collector JSON.
-- Further refinement of direction-aware road facts and route profiles.
-- Editable/customizable spoken warning phrases.
-- Better in-car microphone / hands-free collection behavior.
-- More robust validation and cleanup of collected road facts.
-- OpenPilot/Comma consumer for route-aware speed targets.
-- Cloud/community sharing work tracked separately in `BACKLOG.md`.
+---
 
-## Safety
+# Current design principles
 
-Do not interact with the phone while driving. The overlay, spoken acknowledgements, and passive alerts are intended to minimize interaction, but the driver remains responsible for road conditions, legal speed, traffic signals, braking decisions, and safe vehicle operation. Route Collector alerts are informational only.
+1. **Actual means actual.** Driver-speed warnings use the live GPS speed shown as Actual.
+2. **Direction matters where the road fact is directional.** Speed, deer and passing behavior should not blindly apply to the opposite direction.
+3. **Point facts and zones are different.** A pedestrian crossing or camera is not modeled like a paired safety area.
+4. **Collected speed is authoritative while active.** OSM is a useful posted-speed bootstrap/fallback, not a reason to overwrite an active collected fact.
+5. **Collection should require minimal interaction.** Capture controls are compact and acknowledgements are spoken.
+6. **Correction must be possible.** Undo, Clear, Delete and camera Keep/Remove serve different correction cases.
+7. **Local data survives normal updates.** Development installation is designed around package replacement rather than uninstall/reinstall.
+8. **Update status should be observable.** The app distinguishes installed-vs-published synchronization from a GitHub build that is still underway.
 
+---
 
-## September 2026 road-test bundle
+# Future work
 
-- **Drive auto-stop:** after driving has been established, auto-stop requires about 10 continuous minutes without meaningful GPS position movement. Real movement clears the pending countdown state.
-- **Posted/collected speed:** collected speed remains authoritative. A significant turn ends the collected road speed, shows **Posted Pending**, and forces a fresh OpenStreetMap posted-speed lookup. Clearing a collected speed also refreshes posted speed.
-- **Deer zones:** finalized paired zones announce entry. From 30 minutes before local sunset through 30 minutes after local sunrise, the warning also reminds the driver to use high beams when safe.
-- **Red-light cameras:** camera capture snaps to a plausible intersection ahead in the current travel direction and provides visible/spoken intersection confirmation.
-- **Pedestrian crossings:** the 🚸 marker is stored at the exact tapped GPS position, is bidirectional, and warns at a speed-adaptive approach distance (120–350 m).
-- **Passing zones:** paired start/end zones are directional and warn on entry in the recorded direction to be aware of oncoming traffic.
-- **Live map:** the vehicle is horizontally centered and positioned about one-third of the map height up from the bottom, leaving more road visible ahead.
-- **Speed selector:** supports 30 through 110 km/h in 10 km/h steps.
+Items still appropriate for future development include:
 
-### Build/update status
+- richer collected-point/map editing and cleanup workflows;
+- import/restore of exported Route Collector JSON;
+- cloud/community road-fact sharing;
+- confidence scoring and conflict resolution for shared observations;
+- further route-profile and direction refinements;
+- configurable spoken phrases;
+- deeper hands-free collection;
+- OpenPilot/Comma integration and use of Route Collector as a route-data broker for companion apps.
 
-GitHub Actions publishes the stable `latest-debug` APK after successful builds. The proposed in-app Update / Restore Previous installer is **not enabled yet**: this repository is private and the Android app does not embed GitHub credentials, and Android downgrades need explicit package-installer handling. This remains a backlog item rather than silently weakening repository security.
+See `BACKLOG.md` for deferred ideas and implementation notes.

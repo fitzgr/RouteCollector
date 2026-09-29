@@ -44,6 +44,9 @@ interface RouteDao {
     @Query("SELECT * FROM track_points WHERE driveId = :driveId ORDER BY timestamp DESC LIMIT 1")
     suspend fun latestPoint(driveId: Long): TrackPointEntity?
 
+    @Query("SELECT * FROM track_points WHERE driveId = :driveId AND timestamp BETWEEN :startTime AND :endTime ORDER BY timestamp")
+    suspend fun pointsInTimeRange(driveId: Long, startTime: Long, endTime: Long): List<TrackPointEntity>
+
     @Query("SELECT * FROM track_points WHERE driveId = :driveId AND timestamp <= :timestamp ORDER BY timestamp DESC LIMIT 2")
     suspend fun pointsBeforeMarker(driveId: Long, timestamp: Long): List<TrackPointEntity>
 

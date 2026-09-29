@@ -90,6 +90,8 @@ private fun RouteCollectorScreen() {
     var cameraCaptureBusy by remember { mutableStateOf(false) }
     var cameraSnapPreview by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     var historySegmentPoint by remember { mutableStateOf<TrackPointEntity?>(null) }
+    var historySegmentEnd by remember { mutableStateOf<TrackPointEntity?>(null) }
+    var historyMarkerEdit by remember { mutableStateOf<MarkerEntity?>(null) }
     var historySegmentSpeed by remember { mutableIntStateOf(60) }
 
     val effectiveDriveId = activeDriveId ?: selectedHistoryDriveId ?: drives.firstOrNull()?.id
@@ -352,37 +354,47 @@ private fun RouteCollectorScreen() {
         )
     }
 
-    historySegmentPoint?.let { selected ->
+    if (historySegmentPoint != null && historySegmentEnd != null) {
+        val startSelected = historySegmentPoint!!
+        val endSelected = historySegmentEnd!!
         AlertDialog(
-            onDismissRequest = { historySegmentPoint = null },
+            onDismissRequest = { historySegmentPoint = null; historySegmentEnd = null },
             title = { Text("Edit road segment") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Set the posted speed for the road segment around this point.")
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf(40,50,60,70,80,90,100,110).forEach { speed ->
-                            if (speed % 20 == 0 || speed == historySegmentSpeed) TextButton(onClick = { historySegmentSpeed = speed }) { Text("$speed") }
-                        }
-                    }
-                    Text("Selected time: " + java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(selected.timestamp)), style = MaterialTheme.typography.bodySmall)
+            text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Set the posted speed between the two selected points.")
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(40,50,60,70,80,90,100,110).forEach { speed -> TextButton(onClick = { historySegmentSpeed = speed }) { Text(if (speed == historySegmentSpeed) "[$speed]" else "$speed") } }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch {
-                        val driveId = selectedHistoryDriveId ?: selected.driveId
-                        val window = 45_000L
-                        val segmentPoints = dao.pointsInTimeRange(driveId, selected.timestamp - window, selected.timestamp + window)
-                        val start = segmentPoints.firstOrNull() ?: selected
-                        val end = segmentPoints.lastOrNull() ?: selected
-                        val pair = UUID.randomUUID().toString()
-                        dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = start.timestamp, latitude = start.latitude, longitude = start.longitude, kind = "speed", note = "Speed limit $historySegmentSpeed; edited segment start; pair=$pair"))
-                        dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = end.timestamp, latitude = end.latitude, longitude = end.longitude, kind = "speed", note = "Speed limit $historySegmentSpeed; edited segment end; pair=$pair"))
-                        historySegmentPoint = null
-                    }
-                }) { Text("Set segment") }
-            },
-            dismissButton = { TextButton(onClick = { historySegmentPoint = null }) { Text("Cancel") } }
+            } },
+            confirmButton = { TextButton(onClick = { scope.launch {
+                val driveId = selectedHistoryDriveId ?: startSelected.driveId
+                val ordered = listOf(startSelected, endSelected).sortedBy { it.timestamp }
+                val pair = UUID.randomUUID().toString()
+                dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = ordered[0].timestamp, latitude = ordered[0].latitude, longitude = ordered[0].longitude, kind = "speed", note = "Speed limit $historySegmentSpeed; edited segment start; pair=$pair"))
+                dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = ordered[1].timestamp, latitude = ordered[1].latitude, longitude = ordered[1].longitude, kind = "speed", note = "Speed limit $historySegmentSpeed; edited segment end; pair=$pair"))
+                historySegmentPoint = null; historySegmentEnd = null
+            } }) { Text("Set segment") } },
+            dismissButton = { TextButton(onClick = { historySegmentPoint = null; historySegmentEnd = null }) { Text("Cancel") } }
+        )
+    }
+    historyMarkerEdit?.let { marker ->
+        AlertDialog(
+            onDismissRequest = { historyMarkerEdit = null },
+            title = { Text("Collected marker") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(6.dp)) { Text(marker.kind.replace('_',' ')); Text(marker.note, style = MaterialTheme.typography.bodySmall) } },
+            confirmButton = { TextButton(onClick = { scope.launch {
+                val routePoint = points.minByOrNull { p -> FloatArray(1).also { android.location.Location.distanceBetween(marker.latitude, marker.longitude, p.latitude, p.longitude, it) }[0] }
+                if (routePoint != null) dao.updateMarker(marker.copy(latitude = routePoint.latitude, longitude = routePoint.longitude, timestamp = routePoint.timestamp))
+                historyMarkerEdit = null
+            } }) { Text("Nudge to route") } },
+            dismissButton = { Row {
+                TextButton(onClick = { scope.launch {
+                    val pair = pairId(marker.note)
+                    val targets = if (pair != null) dao.markersWithPairToken(marker.driveId, "pair=$pair") else listOf(marker)
+                    targets.forEach { dao.deleteMarker(it.id) }; historyMarkerEdit = null
+                } }) { Text("Delete") }
+                TextButton(onClick = { historyMarkerEdit = null }) { Text("Close") }
+            } }
         )
     }
 
@@ -601,8 +613,15 @@ private fun RouteCollectorScreen() {
                         TextButton(onClick = {
                             val driveId = activeDriveId
                             if (driveId != null) scope.launch {
-                                val deleted = dao.deleteLatestMarker(driveId)
-                                speakPrompt(if (deleted > 0) "Last marker removed" else "No marker to remove")
+                                val latest = dao.latestMarker(driveId)
+                                if (latest == null) speakPrompt("No marker to remove") else {
+                                    val pair = pairId(latest.note)
+                                    val pairedKinds = setOf("community_safety_zone_start","community_safety_zone_end","senior_safety_zone_start","senior_safety_zone_end","passing_zone_start","passing_zone_end","deer_zone_enter")
+                                    val targets = if (pair != null && latest.kind in pairedKinds) dao.markersWithPairToken(driveId, "pair=$pair") else listOf(latest)
+                                    targets.forEach { dao.deleteMarker(it.id) }
+                                    pair?.let { p -> TrackingState.recentZones.value = TrackingState.recentZones.value.filterNot { it.pairId == p } }
+                                    speakPrompt(if (targets.size > 1) "Last zone removed" else "Last marker removed")
+                                }
                             }
                         }, enabled = activeDriveId != null) { Text("↶ Undo") }
                     }
@@ -822,7 +841,11 @@ private fun RouteCollectorScreen() {
                         activeRoadAlerts = activeRoadAlerts,
                         actualSpeedKph = actualSpeed,
                         fitRoute = activeDriveId == null && selectedHistoryDriveId != null,
-                        onHistoryPointSelected = if (activeDriveId == null && selectedHistoryDriveId != null) { point -> historySegmentPoint = point } else null,
+                        onHistoryPointSelected = if (activeDriveId == null && selectedHistoryDriveId != null) { point ->
+                            if (historySegmentPoint == null) historySegmentPoint = point else historySegmentEnd = point
+                        } else null,
+                        historySegmentStart = historySegmentPoint,
+                        onHistoryMarkerSelected = if (activeDriveId == null && selectedHistoryDriveId != null) { marker -> historyMarkerEdit = marker } else null,
                         modifier = Modifier.fillMaxSize()
                     )
                 }

@@ -14,7 +14,7 @@ object IntersectionSnapper {
         val distanceMetres: Float
     )
 
-    fun findNearestIntersection(latitude: Double, longitude: Double, radiusMetres: Int = 160, travelBearing: Float? = null): SnapResult? {
+    fun findNearestIntersection(latitude: Double, longitude: Double, radiusMetres: Int = 220, travelBearing: Float? = null): SnapResult? {
         val query = """
             [out:json][timeout:8];
             way(around:$radiusMetres,$latitude,$longitude)[highway][name];
@@ -61,7 +61,7 @@ object IntersectionSnapper {
                 for (nodeId in way.nodeIds) roadsByNode.getOrPut(nodeId) { linkedSetOf() }.add(way.name)
             }
 
-            var best: SnapResult? = null
+            val candidates = mutableListOf<SnapResult>()
             for ((nodeId, roadNames) in roadsByNode) {
                 if (roadNames.size < 2) continue
                 val point = nodes[nodeId] ?: continue
@@ -69,21 +69,32 @@ object IntersectionSnapper {
                 Location.distanceBetween(latitude, longitude, point.first, point.second, distance)
                 if (distance[0] > radiusMetres) continue
                 val names = roadNames.take(2).sorted()
-                if (travelBearing != null && distance[0] > 8f) {
-                    val from = Location("camera").apply { this.latitude = latitude; this.longitude = longitude }
-                    val to = Location("intersection").apply { this.latitude = point.first; this.longitude = point.second }
-                    val raw = kotlin.math.abs((((from.bearingTo(to) - travelBearing) % 360f) + 540f) % 360f - 180f)
-                    if (raw > 70f) continue
-                }
-                val candidate = SnapResult(
+                candidates += SnapResult(
                     latitude = point.first,
                     longitude = point.second,
                     intersectionName = names.joinToString(" & "),
                     distanceMetres = distance[0]
                 )
-                if (best == null || candidate.distanceMetres < best!!.distanceMetres) best = candidate
             }
-            best
+
+            if (candidates.isEmpty()) return null
+            if (travelBearing == null) return candidates.minByOrNull { it.distanceMetres }
+
+            // Prefer an intersection ahead of the car, but never let a noisy/stale
+            // bearing make snapping fail completely. If no forward candidate exists,
+            // fall back to the nearest real intersection as the original snapper did.
+            val from = Location("camera").apply { this.latitude = latitude; this.longitude = longitude }
+            val ahead = candidates.filter { candidate ->
+                if (candidate.distanceMetres <= 8f) true else {
+                    val to = Location("intersection").apply {
+                        this.latitude = candidate.latitude
+                        this.longitude = candidate.longitude
+                    }
+                    val delta = kotlin.math.abs((((from.bearingTo(to) - travelBearing) % 360f) + 540f) % 360f - 180f)
+                    delta <= 85f
+                }
+            }
+            (ahead.minByOrNull { it.distanceMetres } ?: candidates.minByOrNull { it.distanceMetres })
         } catch (_: Exception) {
             null
         } finally {

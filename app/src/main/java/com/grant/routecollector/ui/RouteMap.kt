@@ -38,6 +38,8 @@ fun RouteMap(
     actualSpeedKph: Float?,
     fitRoute: Boolean = false,
     onHistoryPointSelected: ((TrackPointEntity) -> Unit)? = null,
+    historySegmentStart: TrackPointEntity? = null,
+    onHistoryMarkerSelected: ((MarkerEntity) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     AndroidView(
@@ -125,6 +127,11 @@ fun RouteMap(
                             title = "Edit road segment here"
                             icon = zoneMarker(Color.rgb(30,136,229), map.context.resources.displayMetrics.density)
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            snippet = when {
+                                historySegmentStart?.id == point.id -> "Segment start selected"
+                                historySegmentStart != null -> "Tap to set segment end"
+                                else -> "Tap to set segment start"
+                            }
                             setOnMarkerClickListener { _, _ -> onHistoryPointSelected(point); true }
                         })
                     }
@@ -174,6 +181,7 @@ fun RouteMap(
                         "senior_safety_zone_end" -> "Senior safety zone end"
                         else -> m.kind.replace('_', ' ').replaceFirstChar { it.uppercase() }
                     }
+                    if (fitRoute && onHistoryMarkerSelected != null) setOnMarkerClickListener { _, _ -> onHistoryMarkerSelected(m); true }
                     snippet = if (index == 0 && current != null) {
                         val d = FloatArray(1); android.location.Location.distanceBetween(current.latitude, current.longitude, m.latitude, m.longitude, d)
                         "NEXT • ${d[0].roundToInt()} m • ${m.note}"

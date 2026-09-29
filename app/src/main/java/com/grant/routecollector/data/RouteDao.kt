@@ -55,6 +55,10 @@ interface RouteDao {
 
     @Query("DELETE FROM markers WHERE id = (SELECT id FROM markers WHERE driveId = :driveId ORDER BY timestamp DESC LIMIT 1)")
     suspend fun deleteLatestMarker(driveId: Long): Int
+    @Query("SELECT * FROM markers WHERE driveId = :driveId ORDER BY timestamp DESC LIMIT 1")
+    suspend fun latestMarker(driveId: Long): MarkerEntity?
+    @Query("SELECT * FROM markers WHERE driveId = :driveId AND note LIKE '%' || :pairToken || '%' ORDER BY timestamp")
+    suspend fun markersWithPairToken(driveId: Long, pairToken: String): List<MarkerEntity>
 
     @Query("SELECT * FROM markers WHERE kind = :kind AND latitude BETWEEN :minLat AND :maxLat AND longitude BETWEEN :minLon AND :maxLon")
     suspend fun markersOfKindInBox(kind: String, minLat: Double, maxLat: Double, minLon: Double, maxLon: Double): List<MarkerEntity>

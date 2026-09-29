@@ -189,6 +189,7 @@ private fun RouteCollectorScreen() {
     val overSpeedActive by TrackingState.overSpeedActive.collectAsStateWithLifecycle()
     val walkingCountdown by TrackingState.walkingAutoStopSeconds.collectAsStateWithLifecycle()
     val driverAlert by TrackingState.driverAlert.collectAsStateWithLifecycle()
+    val recentZones by TrackingState.recentZones.collectAsStateWithLifecycle()
     val travelBearing by TrackingState.latestBearingDegrees.collectAsStateWithLifecycle()
     val latestLat by TrackingState.latestLat.collectAsStateWithLifecycle()
     val latestLon by TrackingState.latestLon.collectAsStateWithLifecycle()
@@ -635,6 +636,29 @@ private fun RouteCollectorScreen() {
                                     speakPrompt("Camera removed")
                                 }
                             }) { Text("Remove") }
+                        }
+                    }
+                    if (recentZones.isNotEmpty()) {
+                        Text("Recent zones", style = MaterialTheme.typography.labelMedium)
+                        recentZones.forEach { zone ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(zone.label, modifier = Modifier.weight(1f), maxLines = 1)
+                                TextButton(onClick = { TrackingState.dismissRecentZone(zone.markerId) }) { Text("Clear") }
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        val facts = dao.getSpokenRoadFacts()
+                                        val targets = if (zone.pairId != null) facts.filter { pairId(it.note) == zone.pairId } else facts.filter { it.id == zone.markerId }
+                                        targets.forEach { dao.deleteMarker(it.id) }
+                                        TrackingState.dismissRecentZone(zone.markerId)
+                                        when (zone.kind) {
+                                            "community", "senior", "passing" -> TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - zone.kind
+                                            "deer" -> TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
+                                            "speed" -> context.startService(Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_CLEAR_SPEED_ZONE })
+                                        }
+                                        speakPrompt(if (targets.isNotEmpty()) "${zone.label} deleted" else "Zone already removed")
+                                    }
+                                }) { Text("Delete") }
+                            }
                         }
                     }
                     if (postedSpeed != null || activeZones.isNotEmpty() || activeRoadAlerts.isNotEmpty()) {

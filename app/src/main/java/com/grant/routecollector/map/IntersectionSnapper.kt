@@ -14,7 +14,7 @@ object IntersectionSnapper {
         val distanceMetres: Float
     )
 
-    fun findNearestIntersection(latitude: Double, longitude: Double, radiusMetres: Int = 220, travelBearing: Float? = null): SnapResult? {
+    fun findNearestIntersection(latitude: Double, longitude: Double, radiusMetres: Int = 60, travelBearing: Float? = null): SnapResult? {
         val query = """
             [out:json][timeout:8];
             way(around:$radiusMetres,$latitude,$longitude)[highway][name];

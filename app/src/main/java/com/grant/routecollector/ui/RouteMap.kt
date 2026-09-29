@@ -37,6 +37,7 @@ fun RouteMap(
     activeRoadAlerts: Set<String>,
     actualSpeedKph: Float?,
     fitRoute: Boolean = false,
+    onHistoryPointSelected: ((TrackPointEntity) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     AndroidView(
@@ -116,6 +117,18 @@ fun RouteMap(
                 val end = points.last()
                 map.overlays.add(Marker(map).apply { position = GeoPoint(start.latitude, start.longitude); title = "Start"; icon = zoneMarker(Color.rgb(46,125,50), map.context.resources.displayMetrics.density); setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER) })
                 map.overlays.add(Marker(map).apply { position = GeoPoint(end.latitude, end.longitude); title = "End"; icon = zoneMarker(Color.rgb(198,40,40), map.context.resources.displayMetrics.density); setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER) })
+                if (onHistoryPointSelected != null) {
+                    val step = (points.size / 12).coerceAtLeast(1)
+                    points.filterIndexed { index, _ -> index % step == 0 }.forEach { point ->
+                        map.overlays.add(Marker(map).apply {
+                            position = GeoPoint(point.latitude, point.longitude)
+                            title = "Edit road segment here"
+                            icon = zoneMarker(Color.rgb(30,136,229), map.context.resources.displayMetrics.density)
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            setOnMarkerClickListener { _, _ -> onHistoryPointSelected(point); true }
+                        })
+                    }
+                }
             }
 
             val visibleMarkers = if (current == null || travelBearing == null) {

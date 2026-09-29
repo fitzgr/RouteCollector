@@ -52,7 +52,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val AUTO_END_NO_MOVEMENT_MILLIS = 10 * 60 * 1000L
         private const val AUTO_END_MOVEMENT_METRES = 25f
         private const val AUTO_END_MAX_ACCURACY_METRES = 25f
-        private const val SAME_DIRECTION_TOLERANCE_DEGREES = 60f
+        private const val SAME_DIRECTION_TOLERANCE_DEGREES = 50f
         private const val REVERSE_DIRECTION_MIN_DEGREES = 120f
         private const val OSM_SPEED_RETRY_MILLIS = 30_000L
         private const val OSM_SPEED_MOVING_REFRESH_MILLIS = 30_000L
@@ -407,7 +407,14 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         val phrase = when (fact.kind) { "community_safety_zone_start", "school_zone", "school_zone_start" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "community"; TrackingState.rememberZone(fact.id, "community", "Community safety zone", fact.note); currentTravelBearing?.let { activeZoneEntryBearings["community"] = it }; if (isSchoolActivityTime()) "Entering community zone. School hours. Watch for children." else "Entering community zone" }; "community_safety_zone_end", "school_zone_end" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"; activeZoneEntryBearings.remove("community"); "Leaving community zone" }; "senior_safety_zone_start" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "senior"; TrackingState.rememberZone(fact.id, "senior", "Senior safety zone", fact.note); currentTravelBearing?.let { activeZoneEntryBearings["senior"] = it }; "Entering senior zone" }; "senior_safety_zone_end" -> { TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"; activeZoneEntryBearings.remove("senior"); "Leaving senior zone" }; else -> null } ?: return
         announcedMarkerIds += fact.id; speak(phrase)
     }
-    private fun handleRedLightCamera(fact: MarkerEntity, distance: Float, approaching: Boolean, warningMetres: Float) {
+    private suspend fun handleRedLightCamera(fact: MarkerEntity, distance: Float, approaching: Boolean, warningMetres: Float) {
+        val savedBearing = markerBearing(fact)
+        val travel = currentTravelBearing
+        if (savedBearing != null && travel != null && bearingDifference(savedBearing, travel) > SAME_DIRECTION_TOLERANCE_DEGREES) {
+            camerasCurrentlyInRange -= fact.id
+            TrackingState.activeRoadAlerts.value = if (camerasCurrentlyInRange.isNotEmpty()) TrackingState.activeRoadAlerts.value + "camera" else TrackingState.activeRoadAlerts.value - "camera"
+            return
+        }
         if (distance <= warningMetres) camerasCurrentlyInRange += fact.id else camerasCurrentlyInRange -= fact.id
         TrackingState.activeRoadAlerts.value = if (camerasCurrentlyInRange.isNotEmpty()) TrackingState.activeRoadAlerts.value + "camera" else TrackingState.activeRoadAlerts.value - "camera"
         if (approaching && distance <= warningMetres && distance > ACTIVE_ZONE_RADIUS_METRES && fact.id !in warnedCameraMarkerIds) { warnedCameraMarkerIds += fact.id; speak("Red-light-camera") }

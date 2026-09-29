@@ -88,6 +88,9 @@ private fun RouteCollectorScreen() {
     var selectedHistoryDriveId by remember { mutableStateOf<Long?>(null) }
     var cameraCaptureMessage by remember { mutableStateOf<String?>(null) }
     var cameraCaptureBusy by remember { mutableStateOf(false) }
+    var cameraSnapPreview by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    var historySegmentPoint by remember { mutableStateOf<TrackPointEntity?>(null) }
+    var historySegmentSpeed by remember { mutableIntStateOf(60) }
 
     val effectiveDriveId = activeDriveId ?: selectedHistoryDriveId ?: drives.firstOrNull()?.id
     val pointsFlow = remember(effectiveDriveId) { effectiveDriveId?.let { dao.observePoints(it) } ?: flowOf(emptyList()) }
@@ -349,6 +352,40 @@ private fun RouteCollectorScreen() {
         )
     }
 
+    historySegmentPoint?.let { selected ->
+        AlertDialog(
+            onDismissRequest = { historySegmentPoint = null },
+            title = { Text("Edit road segment") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Set the posted speed for the road segment around this point.")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(40,50,60,70,80,90,100,110).forEach { speed ->
+                            if (speed % 20 == 0 || speed == historySegmentSpeed) TextButton(onClick = { historySegmentSpeed = speed }) { Text("$speed") }
+                        }
+                    }
+                    Text("Selected time: " + java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(selected.timestamp)), style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        val driveId = selectedHistoryDriveId ?: selected.driveId
+                        val window = 45_000L
+                        val segmentPoints = dao.pointsInTimeRange(driveId, selected.timestamp - window, selected.timestamp + window)
+                        val start = segmentPoints.firstOrNull() ?: selected
+                        val end = segmentPoints.lastOrNull() ?: selected
+                        val pair = UUID.randomUUID().toString()
+                        dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = start.timestamp, latitude = start.latitude, longitude = start.longitude, kind = "speed", note = "Speed limit $historySegmentSpeed; edited segment start; pair=$pair"))
+                        dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = end.timestamp, latitude = end.latitude, longitude = end.longitude, kind = "speed", note = "Speed limit $historySegmentSpeed; edited segment end; pair=$pair"))
+                        historySegmentPoint = null
+                    }
+                }) { Text("Set segment") }
+            },
+            dismissButton = { TextButton(onClick = { historySegmentPoint = null }) { Text("Cancel") } }
+        )
+    }
+
     Scaffold { padding ->
         Column(
             Modifier.padding(padding).padding(horizontal = 10.dp, vertical = 4.dp).fillMaxSize(),
@@ -398,9 +435,10 @@ private fun RouteCollectorScreen() {
                                 dao.latestPoint(driveId)?.let { point ->
                                     val snap = IntersectionSnapper.findNearestIntersection(point.latitude, point.longitude, travelBearing = travelBearing)
                                     saveBoundaryMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = snap?.latitude ?: point.latitude, longitude = snap?.longitude ?: point.longitude, kind = "red_light_camera", note = snap?.let { "Red light camera — ${it.intersectionName}; observed ${point.latitude},${point.longitude}" } ?: "Red light camera — intersection not confirmed; observed ${point.latitude},${point.longitude}"))
-                                    cameraCaptureMessage = if (snap != null) "✓ Camera marked • ${snap.intersectionName}" else "✓ Camera marked"
-                                    scope.launch { kotlinx.coroutines.delay(4000); cameraCaptureMessage = null }
-                                    speakPrompt(if (snap != null) "Marked camera at ${snap.intersectionName}" else "Red light camera marked")
+                                    cameraCaptureMessage = if (snap != null) "✓ Snapped ${snap.distanceMetres.roundToInt()} m → ${snap.intersectionName}" else "⚠ Intersection not confirmed"
+                                    cameraSnapPreview = snap?.let { it.latitude to it.longitude }
+                                    scope.launch { kotlinx.coroutines.delay(6000); cameraCaptureMessage = null; cameraSnapPreview = null }
+                                    speakPrompt(if (snap != null) "Camera snapped to ${snap.intersectionName}, ${snap.distanceMetres.roundToInt()} metres from capture point" else "Camera marked. Intersection could not be confirmed")
                                 }
                                 kotlinx.coroutines.delay(750)
                                 cameraCaptureBusy = false
@@ -784,6 +822,7 @@ private fun RouteCollectorScreen() {
                         activeRoadAlerts = activeRoadAlerts,
                         actualSpeedKph = actualSpeed,
                         fitRoute = activeDriveId == null && selectedHistoryDriveId != null,
+                        onHistoryPointSelected = if (activeDriveId == null && selectedHistoryDriveId != null) { point -> historySegmentPoint = point } else null,
                         modifier = Modifier.fillMaxSize()
                     )
                 }

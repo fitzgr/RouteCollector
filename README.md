@@ -18,7 +18,7 @@ Current functionality includes:
 - OpenStreetMap road-speed lookup when a collected speed fact is not active.
 - Direction-aware speed-limit facts and advance signs.
 - Per-speed overspeed tolerances based on the live GPS **Actual** speed.
-- Red-light-camera collection with intersection snapping.
+- Red-light-camera collection with OpenStreetMap/Overpass intersection snapping, on-screen validation and spoken intersection confirmation.
 - Deer-area endpoint pairing and direction-aware entry/exit behavior.
 - Pedestrian-crossing collection and approach warnings.
 - Community safety zones.
@@ -27,8 +27,8 @@ Current functionality includes:
 - Spoken Text-to-Speech acknowledgements and alerts.
 - Optional visual alerts.
 - Active-zone controls for clearing/removing collected facts.
-- Undo of the latest marker.
-- Recorded-drive history (latest 10 drives).
+- Semantic Undo of the latest marker or paired zone action.
+- Recorded-drive history (latest 10 drives) with post-drive marker cleanup and exact two-point speed-segment editing.
 - OpenStreetMap live/recorded route display.
 - Local JSON export.
 - In-app build/version checking and GitHub debug APK updating.
@@ -245,20 +245,20 @@ On entry in the recorded direction, the app can warn the driver to be aware of o
 
 Red-light-camera collection is intersection-oriented rather than simply storing raw phone GPS.
 
-When **Camera** is tapped, Route Collector uses nearby OpenStreetMap/Overpass road information to find a plausible intersection and attempts to snap the camera fact to the intersection centre.
+When **Camera** is tapped, Route Collector searches nearby OpenStreetMap/Overpass road information within approximately **60 metres** and attempts to snap the camera fact to the intersection centre. It prefers a plausible intersection ahead when travel bearing is reliable, but falls back to the nearest real intersection in range rather than allowing a noisy/stale bearing to make snapping fail.
 
 The capture retains the observed position in its metadata so the original GPS observation is not lost.
 
-If a confident intersection cannot be established, the marker remains at the observed location instead of inventing an intersection.
+A successful snap is shown on screen with the intersection name and snap distance and is also spoken so the driver can validate the capture. If an intersection cannot be established within the local search radius, the marker remains at the observed location instead of inventing an intersection.
 
 Existing legacy `camera` facts remain readable alongside `red_light_camera`.
 
 ### Camera playback
 
 - Configurable approach-warning distance: **100–500 m**, default **200 m**.
-- Camera facts are not dependent on having captured the exact same travel direction.
+- Camera playback uses travel direction when a reliable captured/derived bearing is available, reducing warnings for cameras serving the opposite direction.
 - Approaching a known camera can produce a spoken warning.
-- Near the camera, Route Collector exposes contextual **Keep / Remove** verification.
+- Near the camera, Route Collector exposes contextual removal/correction controls.
 - The camera state is reflected in the Active zones/road-alert UI while relevant.
 
 The live map uses a dedicated camera pin.
@@ -335,7 +335,7 @@ Actions are context dependent:
 - **Clear** changes the current active state without necessarily deleting the underlying road fact.
 - **Delete** removes the relevant collected marker/pair where supported.
 - **Remove** is used for camera correction.
-- **Undo** removes the latest marker from the current drive.
+- **Undo** understands paired zone actions: for Community, Senior, Passing and paired Deer data it removes the logical paired action rather than leaving an orphaned half-zone.
 
 That distinction matters: clearing a state and deleting collected geographic data are intentionally not the same operation.
 
@@ -361,7 +361,7 @@ Marker representations distinguish cameras, pedestrian crossings, deer points, s
 
 The app retains the latest **10 drives** for quick history.
 
-Selecting a recorded drive displays its route fitted to the map with **Start** and **End** markers plus the road facts associated with that drive.
+Selecting a recorded drive displays its route fitted to the map with **Start** and **End** markers plus the road facts associated with that drive.\n\n### Post-drive editing\n\nHistory also acts as a cleanup/editor view. Existing collected markers can be selected for deletion, including pair-aware deletion where applicable, or nudged back to the nearest recorded route point when GPS placement was slightly off.\n\nFor posted-speed corrections, the driver can select **two actual recorded route points** to define the start and end of a road segment, then assign the posted speed to that selected segment. This replaces the earlier time-window approximation and makes the correction correspond to explicit locations on the recorded route.
 
 ---
 
@@ -509,7 +509,7 @@ Do not uninstall the development app merely to resolve an update problem if its 
 3. **Point facts and zones are different.** A pedestrian crossing or camera is not modeled like a paired safety area.
 4. **Collected speed is authoritative while active.** OSM is a useful posted-speed bootstrap/fallback, not a reason to overwrite an active collected fact.
 5. **Collection should require minimal interaction.** Capture controls are compact and acknowledgements are spoken.
-6. **Correction must be possible.** Undo, Clear, Delete and camera Keep/Remove serve different correction cases.
+6. **Correction must be possible.** Semantic Undo, Clear, Delete, camera correction and post-drive History editing serve different correction cases.
 7. **Local data survives normal updates.** Development installation is designed around package replacement rather than uninstall/reinstall.
 8. **Update status should be observable.** The app distinguishes installed-vs-published synchronization from a GitHub build that is still underway.
 
@@ -519,7 +519,7 @@ Do not uninstall the development app merely to resolve an update problem if its 
 
 Items still appropriate for future development include:
 
-- richer collected-point/map editing and cleanup workflows;
+- richer marker editing beyond delete/nudge (for example direct drag/move and editable marker metadata);
 - import/restore of exported Route Collector JSON;
 - cloud/community road-fact sharing;
 - confidence scoring and conflict resolution for shared observations;

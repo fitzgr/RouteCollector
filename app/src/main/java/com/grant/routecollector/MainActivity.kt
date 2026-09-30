@@ -578,7 +578,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt("Pedestrian crossing marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Text("🚸", fontSize = 29.sp, color = Color.Black) }
+                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = flashingButtonColor("pedestrian" in activeRoadAlerts, Color(0xFFE3F2E6)), contentColor = Color(0xFF263238))) { Text("🚸", fontSize = 29.sp, color = Color.Black) }
                         }
                     }
                     Row(
@@ -650,7 +650,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Passing zone end marked" else "Passing zone start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = flashingButtonColor("passing" in activeZones, Color(0xFFDDEEDD)), contentColor = Color(0xFF263238))) { Text("Passing", maxLines = 1) }
+                        }, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = flashingButtonColor("passing" in activeRoadAlerts, Color(0xFFDDEEDD)), contentColor = Color(0xFF263238))) { Text("Passing", maxLines = 1) }
                         }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

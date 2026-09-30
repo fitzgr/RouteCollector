@@ -104,6 +104,9 @@ private fun RouteCollectorScreen() {
     var cameraCaptureBusy by remember { mutableStateOf(false) }
     var cameraSnapPreview by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     var historySegmentPoint by remember { mutableStateOf<TrackPointEntity?>(null) }
+    var historyPointEdit by remember { mutableStateOf<TrackPointEntity?>(null) }
+    var historyPointLat by remember { mutableStateOf("") }
+    var historyPointLon by remember { mutableStateOf("") }
     var historySegmentEnd by remember { mutableStateOf<TrackPointEntity?>(null) }
     var historyMarkerEdit by remember { mutableStateOf<MarkerEntity?>(null) }
     var historySegmentSpeed by remember { mutableIntStateOf(60) }
@@ -437,6 +440,36 @@ private fun RouteCollectorScreen() {
                 }
             },
             confirmButton = { TextButton(onClick = { showHistory = false }) { Text("Close") } }
+        )
+    }
+
+    historyPointEdit?.let { point ->
+        AlertDialog(
+            onDismissRequest = { historyPointEdit = null },
+            title = { Text("Edit collected point") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Correct this GPS point or delete it from the recorded drive.")
+                    OutlinedTextField(value = historyPointLat, onValueChange = { historyPointLat = it }, label = { Text("Latitude") }, singleLine = true)
+                    OutlinedTextField(value = historyPointLon, onValueChange = { historyPointLon = it }, label = { Text("Longitude") }, singleLine = true)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val lat = historyPointLat.toDoubleOrNull()
+                    val lon = historyPointLon.toDoubleOrNull()
+                    if (lat != null && lon != null && lat in -90.0..90.0 && lon in -180.0..180.0) scope.launch {
+                        dao.updatePoint(point.copy(latitude = lat, longitude = lon))
+                        historyPointEdit = null
+                    }
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { scope.launch { dao.deletePoint(point.id); historyPointEdit = null } }) { Text("Delete point") }
+                    TextButton(onClick = { historyPointEdit = null }) { Text("Cancel") }
+                }
+            }
         )
     }
 
@@ -936,7 +969,9 @@ private fun RouteCollectorScreen() {
                         actualSpeedKph = actualSpeed,
                         fitRoute = activeDriveId == null && selectedHistoryDriveId != null,
                         onHistoryPointSelected = if (activeDriveId == null && selectedHistoryDriveId != null) { point ->
-                            if (historySegmentPoint == null) historySegmentPoint = point else historySegmentEnd = point
+                            historyPointEdit = point
+                            historyPointLat = point.latitude.toString()
+                            historyPointLon = point.longitude.toString()
                         } else null,
                         historySegmentStart = historySegmentPoint,
                         onHistoryMarkerSelected = if (activeDriveId == null && selectedHistoryDriveId != null) { marker -> historyMarkerEdit = marker } else null,

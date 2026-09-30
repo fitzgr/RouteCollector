@@ -110,6 +110,7 @@ private fun RouteCollectorScreen() {
     var historySegmentEnd by remember { mutableStateOf<TrackPointEntity?>(null) }
     var historyMarkerEdit by remember { mutableStateOf<MarkerEntity?>(null) }
     var historySegmentSpeed by remember { mutableIntStateOf(60) }
+    var historyEditMode by remember { mutableStateOf("point") }
 
     val effectiveDriveId = activeDriveId ?: selectedHistoryDriveId ?: drives.firstOrNull()?.id
     val pointsFlow = remember(effectiveDriveId) { effectiveDriveId?.let { dao.observePoints(it) } ?: flowOf(emptyList()) }
@@ -950,6 +951,13 @@ private fun RouteCollectorScreen() {
             }
 
 
+                if (activeDriveId == null && selectedHistoryDriveId != null) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(onClick = { historyEditMode = "point"; historySegmentPoint = null; historySegmentEnd = null }, modifier = Modifier.weight(1f)) { Text(if (historyEditMode == "point") "✓ Point edit" else "Point edit") }
+                        Button(onClick = { historyEditMode = "segment"; historySegmentPoint = null; historySegmentEnd = null }, modifier = Modifier.weight(1f)) { Text(if (historyEditMode == "segment") "✓ Speed segment" else "Speed segment") }
+                    }
+                    Text(if (historyEditMode == "point") "Tap a collected GPS point to correct or delete it." else if (historySegmentPoint == null) "Tap the first point of the speed segment." else "Tap the second point of the speed segment.", style = MaterialTheme.typography.bodySmall)
+                }
                 HorizontalDivider()
                 Box(
                     Modifier
@@ -969,9 +977,13 @@ private fun RouteCollectorScreen() {
                         actualSpeedKph = actualSpeed,
                         fitRoute = activeDriveId == null && selectedHistoryDriveId != null,
                         onHistoryPointSelected = if (activeDriveId == null && selectedHistoryDriveId != null) { point ->
-                            historyPointEdit = point
-                            historyPointLat = point.latitude.toString()
-                            historyPointLon = point.longitude.toString()
+                            if (historyEditMode == "segment") {
+                                if (historySegmentPoint == null) historySegmentPoint = point else historySegmentEnd = point
+                            } else {
+                                historyPointEdit = point
+                                historyPointLat = point.latitude.toString()
+                                historyPointLon = point.longitude.toString()
+                            }
                         } else null,
                         historySegmentStart = historySegmentPoint,
                         onHistoryMarkerSelected = if (activeDriveId == null && selectedHistoryDriveId != null) { marker -> historyMarkerEdit = marker } else null,

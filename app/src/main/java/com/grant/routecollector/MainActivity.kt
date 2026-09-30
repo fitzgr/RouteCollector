@@ -135,6 +135,9 @@ private fun RouteCollectorScreen() {
     var latestBuildDuration by remember { mutableStateOf<String?>(null) }
     var latestChanges by remember { mutableStateOf<List<String>>(emptyList()) }
     var showUpdateDialog by remember { mutableStateOf(false) }
+    val updatePrefs = remember { context.getSharedPreferences("routecollector_updates", android.content.Context.MODE_PRIVATE) }
+    var dismissedUpdateBuild by remember { mutableIntStateOf(updatePrefs.getInt("dismissed_update_build", -1)) }
+    var latestBuildCode by remember { mutableIntStateOf(-1) }
     val checkLatestUpdate: suspend () -> Unit = {
         updateBusy = true
         updateCheckCount += 1
@@ -152,6 +155,7 @@ private fun RouteCollectorScreen() {
                 manifestConnection.disconnect()
                 val json = JSONObject(body)
                 val code = json.getInt("versionCode")
+                latestBuildCode = code
                 val name = json.optString("versionName", code.toString())
                 val built = json.optString("buildTime", "")
                 latestBuildLabel = "$name • $built"
@@ -166,7 +170,7 @@ private fun RouteCollectorScreen() {
 
                 if (updateReady) {
                     updateStatus = "New GitHub build available: $name (build $code)"
-                    showUpdateDialog = true
+                    if (dismissedUpdateBuild != code) showUpdateDialog = true
                     keepMonitoring = false
                 } else {
                     updateStatus = "Installed build ${BuildConfig.VERSION_CODE} is in sync with GitHub build $code. Checking Actions…"
@@ -223,7 +227,8 @@ private fun RouteCollectorScreen() {
                     } else {
                         Text("A newer test build is available.", style = MaterialTheme.typography.bodySmall)
                     }
-                    Text("You can choose Not now and keep using this version.", style = MaterialTheme.typography.bodySmall)
+                    Text("Installed: ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.bodySmall)
+                    Text("Update is optional. Not now keeps this version running normally and won’t prompt again for this same build.", style = MaterialTheme.typography.bodySmall)
                 }
             },
             confirmButton = {
@@ -256,7 +261,13 @@ private fun RouteCollectorScreen() {
                 }) { Text("Update") }
             },
             dismissButton = {
-                TextButton(onClick = { showUpdateDialog = false }) { Text("Not now") }
+                TextButton(onClick = {
+                    showUpdateDialog = false
+                    if (latestBuildCode > 0) {
+                        dismissedUpdateBuild = latestBuildCode
+                        updatePrefs.edit().putInt("dismissed_update_build", latestBuildCode).apply()
+                    }
+                }) { Text("Not now") }
             }
         )
     }
@@ -770,6 +781,10 @@ private fun RouteCollectorScreen() {
                         Text("Installed: ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.bodySmall)
                         latestBuildLabel?.let { Text("Latest: $it", style = MaterialTheme.typography.bodySmall) }
                         latestBuildDuration?.let { Text("Last build duration: $it", style = MaterialTheme.typography.bodySmall) }
+                        if (latestChanges.isNotEmpty()) {
+                            Text("What’s new", style = MaterialTheme.typography.labelLarge)
+                            latestChanges.take(5).forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
+                        }
                         Text("Update: $updateStatus", style = MaterialTheme.typography.bodySmall)
                         updateLastCheckedAt?.let { checked ->
                             Text("Last checked: " + java.text.SimpleDateFormat("h:mm:ss a", Locale.getDefault()).format(Date(checked)) + " • check #$updateCheckCount", style = MaterialTheme.typography.bodySmall)

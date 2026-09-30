@@ -86,6 +86,19 @@ private fun RouteCollectorScreen() {
     val activeDriveId by TrackingState.activeDriveId.collectAsStateWithLifecycle()
     val drives by dao.observeDrives().collectAsStateWithLifecycle(initialValue = emptyList())
     var showHistory by remember { mutableStateOf(false) }
+    var restoreStatus by remember { mutableStateOf<String?>(null) }
+    val restoreLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            scope.launch {
+                restoreStatus = "Restoring backup…"
+                restoreStatus = try {
+                    RouteDataExporter.importFromJson(context, dao, uri)
+                } catch (e: Exception) {
+                    "Restore failed: ${e.message ?: "invalid backup"}"
+                }
+            }
+        }
+    }
     var selectedHistoryDriveId by remember { mutableStateOf<Long?>(null) }
     var cameraCaptureMessage by remember { mutableStateOf<String?>(null) }
     var cameraCaptureBusy by remember { mutableStateOf(false) }
@@ -705,6 +718,21 @@ private fun RouteCollectorScreen() {
                     }
                     if (showSettings) {
                         Text("Settings", style = MaterialTheme.typography.labelMedium)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = {
+                                scope.launch {
+                                    restoreStatus = try {
+                                        "Saved " + RouteDataExporter.exportToDownloads(context, dao)
+                                    } catch (e: Exception) {
+                                        "Backup failed: ${e.message ?: "unknown error"}"
+                                    }
+                                }
+                            }) { Text("Backup JSON") }
+                            OutlinedButton(onClick = {
+                                restoreLauncher.launch(arrayOf("application/json", "text/plain"))
+                            }) { Text("Restore JSON") }
+                        }
+                        restoreStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                         Text("Installed: ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.bodySmall)
                         latestBuildLabel?.let { Text("Latest: $it", style = MaterialTheme.typography.bodySmall) }
                         latestBuildDuration?.let { Text("Last build duration: $it", style = MaterialTheme.typography.bodySmall) }

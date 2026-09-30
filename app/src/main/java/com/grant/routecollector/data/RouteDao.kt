@@ -11,6 +11,7 @@ interface RouteDao {
     @Insert suspend fun insertDrive(drive: DriveEntity): Long
     @Update suspend fun updateDrive(drive: DriveEntity)
     @Update suspend fun updateMarker(marker: MarkerEntity)
+    @Update suspend fun updatePoint(point: TrackPointEntity)
     @Insert suspend fun insertPoint(point: TrackPointEntity)
     @Insert suspend fun insertMarker(marker: MarkerEntity): Long
 
@@ -49,6 +50,9 @@ interface RouteDao {
 
     @Query("SELECT * FROM track_points WHERE driveId = :driveId AND timestamp <= :timestamp ORDER BY timestamp DESC LIMIT 2")
     suspend fun pointsBeforeMarker(driveId: Long, timestamp: Long): List<TrackPointEntity>
+
+    @Query("DELETE FROM track_points WHERE id = :pointId")
+    suspend fun deletePoint(pointId: Long): Int
 
     @Query("DELETE FROM markers WHERE id = :markerId")
     suspend fun deleteMarker(markerId: Long): Int

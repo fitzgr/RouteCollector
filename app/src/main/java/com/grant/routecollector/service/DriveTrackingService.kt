@@ -322,9 +322,14 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private fun handlePedestrianCrossing(fact: MarkerEntity, distance: Float, approaching: Boolean) {
         val speed = TrackingState.latestSpeedKph.value ?: 50f
         val warning = (speed * 4f).coerceIn(PEDESTRIAN_MIN_WARNING_METRES, PEDESTRIAN_MAX_WARNING_METRES)
-        if (fact.id !in announcedMarkerIds && approaching && distance <= warning) {
-            announcedMarkerIds += fact.id
-            speak("Pedestrian crossing ahead")
+        if (approaching && distance <= warning) {
+            TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value + "pedestrian"
+            if (fact.id !in announcedMarkerIds) {
+                announcedMarkerIds += fact.id
+                speak("Pedestrian crossing ahead")
+            }
+        } else if (!approaching && distance > ACTIVE_ZONE_RADIUS_METRES) {
+            TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "pedestrian"
         }
     }
 
@@ -336,10 +341,13 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         announcedMarkerIds += fact.id
         if (fact.kind == "passing_zone_start") {
             TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "passing"
-            TrackingState.rememberZone(fact.id, "passing", "Passing zone", fact.note)
-            speak("Entering passing zone. Be aware of oncoming traffic.")
+            TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value + "passing"
+            TrackingState.rememberZone(fact.id, "passing", "Oncoming traffic risk zone", fact.note)
+            speak("Beware of oncoming traffic")
         } else {
             TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "passing"
+            TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "passing"
+            speak("Oncoming traffic risk cleared")
         }
     }
 

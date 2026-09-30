@@ -14,7 +14,7 @@ object IntersectionSnapper {
         val distanceMetres: Float
     )
 
-    fun findNearestIntersection(latitude: Double, longitude: Double, radiusMetres: Int = 60, travelBearing: Float? = null): SnapResult? {
+    fun findNearestIntersection(latitude: Double, longitude: Double, radiusMetres: Int = 60): SnapResult? {
         val query = """
             [out:json][timeout:8];
             way(around:$radiusMetres,$latitude,$longitude)[highway][name];
@@ -77,24 +77,7 @@ object IntersectionSnapper {
                 )
             }
 
-            if (candidates.isEmpty()) return null
-            if (travelBearing == null) return candidates.minByOrNull { it.distanceMetres }
-
-            // Prefer an intersection ahead of the car, but never let a noisy/stale
-            // bearing make snapping fail completely. If no forward candidate exists,
-            // fall back to the nearest real intersection as the original snapper did.
-            val from = Location("camera").apply { this.latitude = latitude; this.longitude = longitude }
-            val ahead = candidates.filter { candidate ->
-                if (candidate.distanceMetres <= 8f) true else {
-                    val to = Location("intersection").apply {
-                        this.latitude = candidate.latitude
-                        this.longitude = candidate.longitude
-                    }
-                    val delta = kotlin.math.abs((((from.bearingTo(to) - travelBearing) % 360f) + 540f) % 360f - 180f)
-                    delta <= 85f
-                }
-            }
-            (ahead.minByOrNull { it.distanceMetres } ?: candidates.minByOrNull { it.distanceMetres })
+            candidates.minByOrNull { it.distanceMetres }
         } catch (_: Exception) {
             null
         } finally {

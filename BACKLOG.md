@@ -23,3 +23,34 @@ Keep this work out of the current road-test build until the local collector, voi
 - Better wake-word / in-car microphone behavior with music playing.
 - OpenPilot/Comma consumer for route-aware speed targets.
 - Additional post-drive editing and marker correction tools.
+
+
+## Zone and safety collection ideas — evaluate before building
+
+Keep these as candidates to revisit rather than automatically adding more driving controls.
+
+- Sharp curve / hazardous bend warnings.
+- Blind intersection or poor-visibility stop approaches.
+- Railway crossings.
+- Hill crests / reduced sight-distance locations.
+- Lane drops, merges and difficult lane-positioning points.
+- Wildlife areas beyond deer.
+- Child-activity / school-bus caution areas.
+- Rough-road / pothole-prone segments.
+- Flood-prone and recurring ice-prone locations.
+- Complex intersections that benefit from an early caution.
+- Generic user-defined caution areas.
+- Candidate caution points inferred from repeated hard or unusual slowdowns.
+
+Status tags for future review: **Idea → Evaluate → Build**.
+
+## Comma / openpilot automatic sign collection — deferred
+
+Do not include this work in the current Route Collector road-test build.
+
+- Study stock openpilot camera/perception interfaces and VisionIPC using recorded drives first.
+- Prototype sign recognition offline on a PC before any in-car integration.
+- Explore read-only detection of useful road signs such as stop signs, speed signs, wildlife/deer signs and other Route Collector facts.
+- Send only candidate detection events (type, confidence, GPS/time) to Route Collector for review/collection.
+- Keep the vehicle-control/openpilot driving stack untouched; Route Collector remains the logging/review layer.
+- Only evaluate real-time comma-device integration after the offline prototype is useful and the hardware is available.

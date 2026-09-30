@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.core.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -115,13 +116,15 @@ private fun RouteCollectorScreen() {
     var updateCheckCount by remember { mutableIntStateOf(0) }
     var updateLastCheckedAt by remember { mutableStateOf<Long?>(null) }
     var latestBuildDuration by remember { mutableStateOf<String?>(null) }
+    var latestChanges by remember { mutableStateOf<List<String>>(emptyList()) }
+    var showUpdateDialog by remember { mutableStateOf(false) }
     val checkLatestUpdate: suspend () -> Unit = {
         updateBusy = true
         updateCheckCount += 1
         updateStatus = "Comparing installed version with GitHub…"
         try {
             var keepMonitoring = true
-            while (keepMonitoring && showSettings) {
+            while (keepMonitoring && (showSettings || updateCheckCount == 1)) {
                 val manifestUrl = "https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json?check=" + System.currentTimeMillis()
                 val manifestConnection = (URL(manifestUrl).openConnection() as HttpURLConnection).apply {
                     instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
@@ -137,11 +140,16 @@ private fun RouteCollectorScreen() {
                 latestBuildLabel = "$name • $built"
                 latestBuildDuration = json.optString("buildDuration", "").takeIf { it.isNotBlank() }
                 latestApkUrl = json.getString("apkUrl")
+                val changes = json.optJSONArray("changes")
+                latestChanges = if (changes != null) buildList {
+                    for (i in 0 until changes.length()) add(changes.optString(i))
+                }.filter { it.isNotBlank() } else emptyList()
                 updateReady = code > BuildConfig.VERSION_CODE
                 updateWebUrl = null
 
                 if (updateReady) {
                     updateStatus = "New GitHub build available: $name (build $code)"
+                    showUpdateDialog = true
                     keepMonitoring = false
                 } else {
                     updateStatus = "Installed build ${BuildConfig.VERSION_CODE} is in sync with GitHub build $code. Checking Actions…"
@@ -178,9 +186,64 @@ private fun RouteCollectorScreen() {
         updateLastCheckedAt = System.currentTimeMillis()
         updateBusy = false
     }
-    LaunchedEffect(showSettings) {
-        if (showSettings) checkLatestUpdate()
+    LaunchedEffect(Unit) {
+        delay(1200)
+        checkLatestUpdate()
     }
+    LaunchedEffect(showSettings) {
+        if (showSettings && updateCheckCount > 0 && !updateBusy) checkLatestUpdate()
+    }
+    if (showUpdateDialog && updateReady) {
+        AlertDialog(
+            onDismissRequest = { showUpdateDialog = false },
+            title = { Text("Route Collector update available") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    latestBuildLabel?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    if (latestChanges.isNotEmpty()) {
+                        Text("What's new", style = MaterialTheme.typography.labelLarge)
+                        latestChanges.take(8).forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
+                    } else {
+                        Text("A newer test build is available.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text("You can choose Not now and keep using this version.", style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showUpdateDialog = false
+                    val apkUrl = latestApkUrl
+                    if (apkUrl != null && !updateBusy) scope.launch {
+                        updateBusy = true
+                        updateStatus = "Downloading..."
+                        try {
+                            val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+                            val apk = File(dir, "routecollector-update.apk")
+                            val connection = (URL(apkUrl).openConnection() as HttpURLConnection).apply {
+                                instanceFollowRedirects = true; connectTimeout = 10000; readTimeout = 30000
+                            }
+                            connection.inputStream.use { input -> apk.outputStream().use { output -> input.copyTo(output) } }
+                            connection.disconnect()
+                            val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apk)
+                            context.startActivity(Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(uri, "application/vnd.android.package-archive")
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                            })
+                            updateStatus = "Installer opened"
+                        } catch (_: Exception) {
+                            updateStatus = "Download failed - use the latest-debug release"
+                            updateWebUrl = "https://github.com/fitzgr/RouteCollector/releases/tag/latest-debug"
+                        }
+                        updateBusy = false
+                    }
+                }) { Text("Update") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUpdateDialog = false }) { Text("Not now") }
+            }
+        )
+    }
+
     val prefs = remember { context.getSharedPreferences("routecollector_overlay", android.content.Context.MODE_PRIVATE) }
     var visualAlerts by remember { mutableStateOf(prefs.getBoolean("visual_alerts_enabled", true)) }
     var cameraWarning by remember { mutableIntStateOf(prefs.getInt("red_light_camera_warning_metres", 200)) }
@@ -198,6 +261,16 @@ private fun RouteCollectorScreen() {
     val travelBearing by TrackingState.latestBearingDegrees.collectAsStateWithLifecycle()
     val latestLat by TrackingState.latestLat.collectAsStateWithLifecycle()
     val latestLon by TrackingState.latestLon.collectAsStateWithLifecycle()
+    val alertFlash = rememberInfiniteTransition(label = "road-alert-flash")
+    val alertFlashPhase by alertFlash.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(animation = tween(550), repeatMode = RepeatMode.Reverse),
+        label = "road-alert-phase"
+    )
+    fun flashingButtonColor(active: Boolean, normal: Color): Color =
+        if (active && alertFlashPhase >= 0.5f) Color(0xFFD32F2F) else normal
+
     suspend fun saveBoundaryMarker(marker: MarkerEntity) {
         if (marker.kind in setOf("speed","speed_advance","community_safety_zone_start","community_safety_zone_end","senior_safety_zone_start","senior_safety_zone_end","red_light_camera","camera")) {
             val nearby = dao.markersOfKindInBox(marker.kind, marker.latitude - 0.002, marker.latitude + 0.002, marker.longitude - 0.002, marker.longitude + 0.002)
@@ -423,10 +496,29 @@ private fun RouteCollectorScreen() {
                         Button(onClick = { showHistory = true }, modifier = Modifier.height(34.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE0E0E0), contentColor = Color(0xFF37474F)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("History", style = MaterialTheme.typography.bodySmall) }
                         TextButton(onClick = { showSettings = !showSettings }, modifier = Modifier.height(34.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) { Text("⚙") }
                     }
-                    Text(
-                        "${if (collectedSpeed) "Collected" else "Posted"} ${postedSpeed?.let { "$it km/h" } ?: "Pending"}   Actual ${actualSpeed?.let { "${it.toInt()} km/h" } ?: "--"}",
-                        style = MaterialTheme.typography.bodyLarge
-                    )
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "${if (collectedSpeed) "Collected" else "Posted"} ${postedSpeed?.let { "$it km/h" } ?: "Pending"}   Actual ${actualSpeed?.let { "${it.toInt()} km/h" } ?: "--"}",
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = {
+                            val driveId = activeDriveId
+                            if (driveId != null) scope.launch {
+                                val latest = dao.latestMarker(driveId)
+                                if (latest == null) speakPrompt("No marker to remove") else {
+                                    val pair = pairId(latest.note)
+                                    val pairedKinds = setOf("community_safety_zone_start","community_safety_zone_end","senior_safety_zone_start","senior_safety_zone_end","passing_zone_start","passing_zone_end","deer_zone_enter")
+                                    val targets = if (pair != null && latest.kind in pairedKinds) dao.markersWithPairToken(driveId, "pair=$pair") else listOf(latest)
+                                    targets.forEach { dao.deleteMarker(it.id) }
+                                    pair?.let { p -> TrackingState.recentZones.value = TrackingState.recentZones.value.filterNot { it.pairId == p } }
+                                    speakPrompt(if (targets.size > 1) "Last zone removed" else "Last marker removed")
+                                }
+                            }
+                        }, enabled = activeDriveId != null, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                            Text("↶ Undo", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                     walkingCountdown?.let { Text("No GPS movement • auto-stop in ${it}s", style = MaterialTheme.typography.bodySmall, color = Color(0xFFB26A00)) }
                     cameraCaptureMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF2E7D32)) }
                     Row(
@@ -445,7 +537,7 @@ private fun RouteCollectorScreen() {
                                 cameraCaptureBusy = true
                                 scope.launch {
                                 dao.latestPoint(driveId)?.let { point ->
-                                    val snap = IntersectionSnapper.findNearestIntersection(point.latitude, point.longitude, travelBearing = travelBearing)
+                                    val snap = IntersectionSnapper.findNearestIntersection(point.latitude, point.longitude)
                                     saveBoundaryMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = snap?.latitude ?: point.latitude, longitude = snap?.longitude ?: point.longitude, kind = "red_light_camera", note = snap?.let { "Red light camera — ${it.intersectionName}; observed ${point.latitude},${point.longitude}" } ?: "Red light camera — intersection not confirmed; observed ${point.latitude},${point.longitude}"))
                                     cameraCaptureMessage = if (snap != null) "✓ Snapped ${snap.distanceMetres.roundToInt()} m → ${snap.intersectionName}" else "⚠ Intersection not confirmed"
                                     cameraSnapPreview = snap?.let { it.latitude to it.longitude }
@@ -456,7 +548,7 @@ private fun RouteCollectorScreen() {
                                 cameraCaptureBusy = false
                             }
                             }
-                        }, enabled = activeDriveId != null && !cameraCaptureBusy, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("camera" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Text("📷", fontSize = 29.sp) }
+                        }, enabled = activeDriveId != null && !cameraCaptureBusy, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = flashingButtonColor("camera" in activeRoadAlerts, Color(0xFFE3F2E6)), contentColor = Color(0xFF263238))) { Text("📷", fontSize = 29.sp) }
                         Button(onClick = {
                             val driveId = activeDriveId
                             if (driveId != null) scope.launch {
@@ -477,7 +569,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (paired) "Deer zone captured" else "Deer zone marked")
                                 }
                             }
-                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("deer" in activeRoadAlerts) Color(0xFFFFE0A3) else Color(0xFFE3F2E6), contentColor = Color(0xFF263238))) { Text("🦌", fontSize = 29.sp, color = Color(0xFF263238)) }
+                        }, enabled = activeDriveId != null, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = flashingButtonColor("deer" in activeRoadAlerts, Color(0xFFE3F2E6)), contentColor = Color(0xFF263238))) { Text("🦌", fontSize = 29.sp, color = Color(0xFF263238)) }
                         Button(onClick = {
                             val driveId = activeDriveId
                             if (driveId != null) scope.launch {
@@ -519,7 +611,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Community safety end marked" else "Community safety start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("community" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) {
+                        }, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = flashingButtonColor("community" in activeZones, Color(0xFFDDEEDD)), contentColor = Color(0xFF263238))) {
                             Text("Community", maxLines = 1)
                         }
                         Button(onClick = {
@@ -542,7 +634,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Senior safety end marked" else "Senior safety start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("senior" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) {
+                        }, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = flashingButtonColor("senior" in activeZones, Color(0xFFDDEEDD)), contentColor = Color(0xFF263238))) {
                             Text("Senior", maxLines = 1)
                         }
                         Button(onClick = {
@@ -558,7 +650,7 @@ private fun RouteCollectorScreen() {
                                     speakPrompt(if (isActive) "Passing zone end marked" else "Passing zone start marked")
                                 }
                             }
-                        }, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = if ("passing" in activeZones) Color(0xFFFFE0A3) else Color(0xFFDDEEDD), contentColor = Color(0xFF263238))) { Text("Passing", maxLines = 1) }
+                        }, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = flashingButtonColor("passing" in activeZones, Color(0xFFDDEEDD)), contentColor = Color(0xFF263238))) { Text("Passing", maxLines = 1) }
                         }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -607,23 +699,9 @@ private fun RouteCollectorScreen() {
                                         speakPrompt(if (advance) "$markerSpeed kilometre advance sign marked" else "$markerSpeed kilometre zone start marked")
                                     }
                                 }
-                            }) { Text("Set") }
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = {
-                            val driveId = activeDriveId
-                            if (driveId != null) scope.launch {
-                                val latest = dao.latestMarker(driveId)
-                                if (latest == null) speakPrompt("No marker to remove") else {
-                                    val pair = pairId(latest.note)
-                                    val pairedKinds = setOf("community_safety_zone_start","community_safety_zone_end","senior_safety_zone_start","senior_safety_zone_end","passing_zone_start","passing_zone_end","deer_zone_enter")
-                                    val targets = if (pair != null && latest.kind in pairedKinds) dao.markersWithPairToken(driveId, "pair=$pair") else listOf(latest)
-                                    targets.forEach { dao.deleteMarker(it.id) }
-                                    pair?.let { p -> TrackingState.recentZones.value = TrackingState.recentZones.value.filterNot { it.pairId == p } }
-                                    speakPrompt(if (targets.size > 1) "Last zone removed" else "Last marker removed")
-                                }
-                            }
-                        }, enabled = activeDriveId != null) { Text("↶ Undo") }
+                            }, colors = ButtonDefaults.buttonColors(
+                                containerColor = flashingButtonColor(overSpeedActive, MaterialTheme.colorScheme.primary)
+                            )) { Text("Set") }
                     }
                     if (showSettings) {
                         Text("Settings", style = MaterialTheme.typography.labelMedium)
@@ -700,7 +778,7 @@ private fun RouteCollectorScreen() {
                         recentZones.forEach { zone ->
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text(zone.label, modifier = Modifier.weight(1f), maxLines = 1)
-                                TextButton(onClick = { TrackingState.dismissRecentZone(zone.markerId) }) { Text("Clear") }
+                                TextButton(onClick = { TrackingState.dismissRecentZone(zone.markerId) }) { Text("Keep") }
                                 TextButton(onClick = {
                                     scope.launch {
                                         val facts = dao.getSpokenRoadFacts()
@@ -727,22 +805,16 @@ private fun RouteCollectorScreen() {
                                     context.startService(Intent(context, DriveTrackingService::class.java).apply {
                                         action = DriveTrackingService.ACTION_CLEAR_SPEED_ZONE
                                     })
-                                }) { Text("Clear") }
+                                }) { Text("Keep") }
                             }
                         }
                         if ("community" in activeZones) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Community safety", modifier = Modifier.weight(1f))
                                 TextButton(onClick = {
-                                    val driveId = activeDriveId
-                                    if (driveId != null) scope.launch {
-                                        dao.latestPoint(driveId)?.let { point ->
-                                            dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = "community_safety_zone_end", note = "Community safety zone end"))
-                                            TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"
-                                            speakPrompt("Community safety zone cleared")
-                                        }
-                                    }
-                                }) { Text("Clear") }
+                                    TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"
+                                    speakPrompt("Community safety zone kept")
+                                }) { Text("Keep") }
                                 TextButton(onClick = {
                                     scope.launch {
                                         val deleted = deleteNearestZonePair("community")
@@ -756,15 +828,9 @@ private fun RouteCollectorScreen() {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Senior safety", modifier = Modifier.weight(1f))
                                 TextButton(onClick = {
-                                    val driveId = activeDriveId
-                                    if (driveId != null) scope.launch {
-                                        dao.latestPoint(driveId)?.let { point ->
-                                            dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = "senior_safety_zone_end", note = "Senior safety zone end"))
-                                            TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"
-                                            speakPrompt("Senior safety zone cleared")
-                                        }
-                                    }
-                                }) { Text("Clear") }
+                                    TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"
+                                    speakPrompt("Senior safety zone kept")
+                                }) { Text("Keep") }
                                 TextButton(onClick = {
                                     scope.launch {
                                         val deleted = deleteNearestZonePair("senior")
@@ -799,7 +865,7 @@ private fun RouteCollectorScreen() {
                                 TextButton(onClick = {
                                     TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
                                     speakPrompt("Deer zone cleared")
-                                }) { Text("Clear") }
+                                }) { Text("Keep") }
                                 TextButton(onClick = {
                                     scope.launch {
                                         val lat = TrackingState.latestLat.value

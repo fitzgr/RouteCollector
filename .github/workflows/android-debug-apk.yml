@@ -72,7 +72,19 @@ jobs:
           test "$VERSION_CODE" != "null"
           test "$VERSION_NAME" != "null"
           echo "Publishing APK version $VERSION_NAME (build $VERSION_CODE)"
-          printf '{"versionCode":%s,"versionName":"%s","buildTime":"%s","buildDuration":"%s","apkUrl":"https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/routecollector-debug.apk"}\n' "$VERSION_CODE" "$VERSION_NAME" "$BUILD_TIME" "$BUILD_DURATION" > update.json
+          if git rev-parse latest-debug >/dev/null 2>&1; then
+            CHANGES_JSON="$(git log latest-debug..HEAD --pretty=format:'%s' | head -8 | jq -R -s 'split("\n") | map(select(length > 0))')"
+          else
+            CHANGES_JSON="$(git log -8 --pretty=format:'%s' | jq -R -s 'split("\n") | map(select(length > 0))')"
+          fi
+          jq -n \
+            --argjson versionCode "$VERSION_CODE" \
+            --arg versionName "$VERSION_NAME" \
+            --arg buildTime "$BUILD_TIME" \
+            --arg buildDuration "$BUILD_DURATION" \
+            --arg apkUrl "https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/routecollector-debug.apk" \
+            --argjson changes "$CHANGES_JSON" \
+            '{versionCode:$versionCode,versionName:$versionName,buildTime:$buildTime,buildDuration:$buildDuration,apkUrl:$apkUrl,changes:$changes}' > update.json
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

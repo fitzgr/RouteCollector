@@ -26,7 +26,7 @@ Current functionality includes:
 - Directional passing zones.
 - Spoken Text-to-Speech acknowledgements and alerts.
 - Optional visual alerts.
-- Active-zone controls for clearing/removing collected facts.
+- Active-zone controls use **Keep** for non-destructive dismissal and **Delete/Remove** for destructive correction.
 - Semantic Undo of the latest marker or paired zone action.
 - Recorded-drive history (latest 10 drives) with post-drive marker cleanup and exact two-point speed-segment editing.
 - OpenStreetMap live/recorded route display.
@@ -211,7 +211,7 @@ Older school-zone marker types remain readable for compatibility.
 A community zone can be:
 
 - ended normally by recording its end;
-- **cleared** from the current active state; or
+- **kept** (dismissed from the current active display without deleting the collected fact); or
 - **deleted** as a nearby paired collected zone when the capture was wrong.
 
 ---
@@ -225,7 +225,7 @@ Marker types:
 `senior_safety_zone_start`  
 `senior_safety_zone_end`
 
-They can announce entry/exit, appear independently in **Active zones**, and can be cleared or have their nearby paired markers deleted.
+They can announce entry/exit, appear independently in **Active zones**, and can be kept/dismissed from the current display or have their nearby paired markers deleted.
 
 Keeping senior and community zones separate allows their presentation and future warning behaviour to evolve independently.
 
@@ -245,7 +245,7 @@ On entry in the recorded direction, the app can warn the driver to be aware of o
 
 Red-light-camera collection is intersection-oriented rather than simply storing raw phone GPS.
 
-When **Camera** is tapped, Route Collector searches nearby OpenStreetMap/Overpass road information within approximately **60 metres** and attempts to snap the camera fact to the intersection centre. It prefers a plausible intersection ahead when travel bearing is reliable, but falls back to the nearest real intersection in range rather than allowing a noisy/stale bearing to make snapping fail.
+When **Camera** is tapped, Route Collector searches nearby OpenStreetMap/Overpass road information within approximately **60 metres** and attempts to snap the camera fact to the intersection centre. Camera snapping is deliberately direction-independent: it chooses the nearest valid named-road intersection in range. A red-light camera belongs to the intersection, so current travel bearing is not used to reject or prefer a candidate.
 
 The capture retains the observed position in its metadata so the original GPS observation is not lost.
 
@@ -332,9 +332,10 @@ Depending on what is active it can show:
 
 Actions are context dependent:
 
-- **Clear** changes the current active state without necessarily deleting the underlying road fact.
+- **Keep** dismisses the current active/recent display while retaining the underlying collected road fact.
 - **Delete** removes the relevant collected marker/pair where supported.
 - **Remove** is used for camera correction.
+- Collector buttons flash red while a detected camera/deer/community/senior/passing alert is active. The speed Set control flashes only while the live speed exceeds the configured threshold.
 - **Undo** understands paired zone actions: for Community, Senior, Passing and paired Deer data it removes the logical paired action rather than leaving an orphaned half-zone.
 
 That distinction matters: clearing a state and deleting collected geographic data are intentionally not the same operation.
@@ -400,7 +401,7 @@ Preferences persist locally.
 
 # In-app build/update checker
 
-The Settings panel displays the **installed version name/build number** and checks the stable GitHub `latest-debug` publication.
+Route Collector performs a **non-blocking update check shortly after launch** and also exposes update status in Settings. If a newer `latest-debug` build exists, the app shows an optional **Update / Not now** dialog with recent commit messages under **What's new**. Choosing Not now never blocks the current app.
 
 The checker now follows this sequence:
 
@@ -511,7 +512,7 @@ Do not uninstall the development app merely to resolve an update problem if its 
 5. **Collection should require minimal interaction.** Capture controls are compact and acknowledgements are spoken.
 6. **Correction must be possible.** Semantic Undo, Clear, Delete, camera correction and post-drive History editing serve different correction cases.
 7. **Local data survives normal updates.** Development installation is designed around package replacement rather than uninstall/reinstall.
-8. **Update status should be observable.** The app distinguishes installed-vs-published synchronization from a GitHub build that is still underway.
+8. **Update status should be observable and optional.** The app distinguishes installed-vs-published synchronization from a GitHub build that is still underway, and an available update never blocks use of the installed build.
 
 ---
 

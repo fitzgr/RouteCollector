@@ -20,17 +20,17 @@ Current functionality includes:
 - Per-speed overspeed tolerances based on the live GPS **Actual** speed.
 - Red-light-camera collection with OpenStreetMap/Overpass intersection snapping, on-screen validation and spoken intersection confirmation.
 - Deer-area endpoint pairing and direction-aware entry/exit behavior.
-- Pedestrian-crossing collection and approach warnings.
+- Pedestrian-crossing collection with speed-adaptive approach warnings, spoken **“Pedestrian crossing ahead”** alerts, and a flashing collector indicator while relevant.
 - Community safety zones.
 - Senior safety zones.
-- Directional passing zones.
+- Directional passing/oncoming-risk zones with spoken **“Beware of oncoming traffic”** entry and **“Oncoming traffic risk cleared”** exit alerts, plus a flashing Passing control while active.
 - Spoken Text-to-Speech acknowledgements and alerts.
 - Optional visual alerts.
 - Active-zone controls use **Keep** for non-destructive dismissal and **Delete/Remove** for destructive correction.
 - Semantic Undo of the latest marker or paired zone action.
 - Recorded-drive history (latest 10 drives) with post-drive marker cleanup and exact two-point speed-segment editing.
 - OpenStreetMap live/recorded route display.
-- Local JSON export.
+- Local JSON backup and non-destructive JSON restore for drives, GPS points and road-fact markers.
 - In-app build/version checking and GitHub debug APK updating.
 - GitHub Actions cloud builds signed with the same development certificate used by the established test installation.
 
@@ -183,7 +183,7 @@ Unlike camera collection, the pedestrian marker is stored at the **exact GPS pos
 
 Pedestrian crossings are treated as bidirectional road facts. The warning distance adapts to speed and is constrained to approximately **120–350 metres**.
 
-The map uses a dedicated 🚸 representation.
+The map uses a dedicated 🚸 representation. On approach, the app announces **“Pedestrian crossing ahead”** and flashes the pedestrian collector control while the crossing alert is active; the alert clears after the crossing has been passed.
 
 ---
 
@@ -237,7 +237,7 @@ Passing zones are **directional paired start/end road segments**.
 
 They are not treated as generic point markers. The direction in which the zone was captured matters, allowing the app to avoid applying the same directional passing-zone state indiscriminately to opposing travel.
 
-On entry in the recorded direction, the app can warn the driver to be aware of oncoming traffic.
+On entry in the recorded direction, the app announces **“Beware of oncoming traffic”**, marks the oncoming-risk state active, and flashes the Passing control red. At the recorded end boundary it announces **“Oncoming traffic risk cleared”** and clears the active warning.
 
 ---
 
@@ -376,7 +376,9 @@ Core entities:
 - **TrackPointEntity** — GPS breadcrumb data.
 - **MarkerEntity** — a collected geographic road fact.
 
-The app can export its data to Android Downloads as JSON using the `routecollector-export-v1` format.
+The app can back up its data to Android Downloads as JSON using the `routecollector-export-v1` format. The backup includes drives, recorded GPS points and collected road-fact markers.
+
+Settings also provides **Restore JSON**. Restore validates the Route Collector backup format and imports the backup as new database rows, remapping restored point and marker relationships to their restored drives rather than destructively replacing the current database.
 
 The existing app database is intentionally preserved when installing development updates over the existing package with ADB `install -r`.
 
@@ -391,7 +393,7 @@ Current local settings include:
 - Visual alerts on/off.
 - Red-light-camera warning distance.
 - Per-posted-speed overspeed tolerance.
-- Route-data export.
+- **Backup JSON** and **Restore JSON** for local route data.
 - Installed/latest build information.
 - GitHub update checking and installation.
 
@@ -521,7 +523,6 @@ Do not uninstall the development app merely to resolve an update problem if its 
 Items still appropriate for future development include:
 
 - richer marker editing beyond delete/nudge (for example direct drag/move and editable marker metadata);
-- import/restore of exported Route Collector JSON;
 - cloud/community road-fact sharing;
 - confidence scoring and conflict resolution for shared observations;
 - further route-profile and direction refinements;

@@ -6,6 +6,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import org.json.JSONArray
 import org.json.JSONObject
+import android.net.Uri
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -78,6 +79,68 @@ object RouteDataExporter {
 
         if (automatic) pruneOldAutomaticBackups(context)
         return fileName
+    }
+
+    suspend fun importFromJson(context: Context, dao: RouteDao, uri: Uri): String {
+        val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            ?: error("Could not open backup")
+        val root = JSONObject(text)
+        require(root.optString("format") == "routecollector-export-v1") { "Unsupported RouteCollector backup" }
+
+        val drivesJson = root.optJSONArray("drives") ?: JSONArray()
+        val pointsJson = root.optJSONArray("points") ?: JSONArray()
+        val markersJson = root.optJSONArray("markers") ?: JSONArray()
+        val idMap = mutableMapOf<Long, Long>()
+
+        // Import as new rows rather than overwriting current data. This makes restore safe
+        // to use on a fresh install and avoids destructive replacement on an existing one.
+        for (i in 0 until drivesJson.length()) {
+            val d = drivesJson.getJSONObject(i)
+            val oldId = d.getLong("id")
+            val newId = dao.insertDrive(
+                DriveEntity(
+                    startedAt = d.getLong("startedAt"),
+                    endedAt = if (d.isNull("endedAt")) null else d.getLong("endedAt"),
+                    title = d.optString("title", "Drive")
+                )
+            )
+            idMap[oldId] = newId
+        }
+
+        var pointCount = 0
+        for (i in 0 until pointsJson.length()) {
+            val p = pointsJson.getJSONObject(i)
+            val newDriveId = idMap[p.getLong("driveId")] ?: continue
+            dao.insertPoint(
+                TrackPointEntity(
+                    driveId = newDriveId,
+                    timestamp = p.getLong("timestamp"),
+                    latitude = p.getDouble("latitude"),
+                    longitude = p.getDouble("longitude"),
+                    accuracyMetres = p.optDouble("accuracyMetres", 0.0).toFloat(),
+                    speedMps = if (p.isNull("speedMps")) null else p.getDouble("speedMps").toFloat()
+                )
+            )
+            pointCount++
+        }
+
+        var markerCount = 0
+        for (i in 0 until markersJson.length()) {
+            val m = markersJson.getJSONObject(i)
+            val newDriveId = idMap[m.getLong("driveId")] ?: continue
+            dao.insertMarker(
+                MarkerEntity(
+                    driveId = newDriveId,
+                    timestamp = m.getLong("timestamp"),
+                    latitude = m.getDouble("latitude"),
+                    longitude = m.getDouble("longitude"),
+                    kind = m.getString("kind"),
+                    note = m.optString("note", "")
+                )
+            )
+            markerCount++
+        }
+        return "${idMap.size} drives, $pointCount points, $markerCount markers restored"
     }
 
     private fun pruneOldAutomaticBackups(context: Context) {

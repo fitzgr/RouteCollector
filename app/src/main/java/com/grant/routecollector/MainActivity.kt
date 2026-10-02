@@ -103,6 +103,7 @@ private fun RouteCollectorScreen() {
     var cameraCaptureMessage by remember { mutableStateOf<String?>(null) }
     var cameraCaptureBusy by remember { mutableStateOf(false) }
     var cameraSnapPreview by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    var deerDeleteTarget by remember { mutableStateOf<MarkerEntity?>(null) }
     var historySegmentPoint by remember { mutableStateOf<TrackPointEntity?>(null) }
     var historyPointEdit by remember { mutableStateOf<TrackPointEntity?>(null) }
     var historyPointLat by remember { mutableStateOf("") }
@@ -297,7 +298,7 @@ private fun RouteCollectorScreen() {
         label = "road-alert-phase"
     )
     fun flashingButtonColor(active: Boolean, normal: Color): Color =
-        if (active && alertFlashPhase >= 0.5f) Color(0xFFD32F2F) else normal
+        if (active && alertFlashPhase >= 0.5f) Color(0xFFFFB300) else normal
 
     suspend fun saveBoundaryMarker(marker: MarkerEntity) {
         if (marker.kind in setOf("speed","speed_advance","community_safety_zone_start","community_safety_zone_end","senior_safety_zone_start","senior_safety_zone_end","red_light_camera","camera")) {
@@ -529,6 +530,58 @@ private fun RouteCollectorScreen() {
         )
     }
 
+    deerDeleteTarget?.let { target ->
+        val targetPairId = pairId(target.note)
+        AlertDialog(
+            onDismissRequest = { deerDeleteTarget = null },
+            title = { Text(if (targetPairId != null) "Delete deer zone" else "Delete deer marker") },
+            text = {
+                Text(
+                    if (targetPairId != null)
+                        "Delete just this marker, or delete both markers that define this deer zone?"
+                    else
+                        "This is an unpaired deer marker. Delete it?"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        val deer = dao.getDeerZoneMarkers()
+                        if (targetPairId != null) {
+                            deer.filter { pairId(it.note) == targetPairId }.forEach { dao.deleteMarker(it.id) }
+                            speakPrompt("Deer zone deleted")
+                        } else {
+                            dao.deleteMarker(target.id)
+                            speakPrompt("Deer marker deleted")
+                        }
+                        TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
+                        deerDeleteTarget = null
+                    }
+                }) { Text(if (targetPairId != null) "Delete zone" else "Delete marker") }
+            },
+            dismissButton = {
+                Row {
+                    if (targetPairId != null) {
+                        TextButton(onClick = {
+                            scope.launch {
+                                val deer = dao.getDeerZoneMarkers()
+                                dao.deleteMarker(target.id)
+                                deer.filter { it.id != target.id && pairId(it.note) == targetPairId }.forEach { other ->
+                                    val cleaned = other.note.replace(Regex(";?\\s*pair=[A-Za-z0-9-]+"), "").trim().trimEnd(';')
+                                    dao.updateMarker(other.copy(note = cleaned))
+                                }
+                                TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
+                                deerDeleteTarget = null
+                                speakPrompt("Deer marker deleted")
+                            }
+                        }) { Text("Delete marker") }
+                    }
+                    TextButton(onClick = { deerDeleteTarget = null }) { Text("Cancel") }
+                }
+            }
+        )
+    }
+
     Scaffold { padding ->
         Column(
             Modifier.padding(padding).padding(horizontal = 10.dp, vertical = 4.dp).fillMaxSize(),
@@ -613,18 +666,27 @@ private fun RouteCollectorScreen() {
                                 dao.latestPoint(driveId)?.let { point ->
                                     val bearing = travelBearing
                                     val existing = dao.getDeerZoneMarkers()
-                                    var matchedDeer: MarkerEntity? = null
-                                    val paired = bearing != null && existing.any { other ->
-                                        val saved = Regex("bearing=(-?\\d+)").find(other.note)?.groupValues?.getOrNull(1)?.toFloatOrNull()?.takeIf { it >= 0f } ?: return@any false
-                                        val dist = FloatArray(1); android.location.Location.distanceBetween(point.latitude, point.longitude, other.latitude, other.longitude, dist)
-                                        val raw = abs((((bearing % 360f) + 360f) % 360f) - (((saved % 360f) + 360f) % 360f)); val diff = if (raw > 180f) 360f - raw else raw
-                                        (dist[0] <= 20_000f && diff >= 120f).also { if (it) matchedDeer = other }
+                                    data class DeerCandidate(val marker: MarkerEntity, val distance: Float, val bearingDifference: Float)
+                                    val candidates = if (bearing != null) existing.mapNotNull { other ->
+                                        if (pairId(other.note) != null) return@mapNotNull null
+                                        val saved = Regex("bearing=(-?\\d+)").find(other.note)?.groupValues?.getOrNull(1)?.toFloatOrNull()?.takeIf { it >= 0f } ?: return@mapNotNull null
+                                        val dist = FloatArray(1)
+                                        android.location.Location.distanceBetween(point.latitude, point.longitude, other.latitude, other.longitude, dist)
+                                        if (dist[0] > 5_000f) return@mapNotNull null
+                                        val raw = abs((((bearing % 360f) + 360f) % 360f) - (((saved % 360f) + 360f) % 360f))
+                                        DeerCandidate(other, dist[0], if (raw > 180f) 360f - raw else raw)
+                                    } else emptyList()
+                                    val matchedDeer = candidates.filter { it.bearingDifference >= 120f }.minByOrNull { it.distance }?.marker
+                                    val duplicateStart = candidates.filter { it.bearingDifference <= 50f }.minByOrNull { it.distance }?.marker
+                                    if (matchedDeer == null && duplicateStart != null) {
+                                        speakPrompt("Deer zone already started")
+                                        return@let
                                     }
-                                    val deerPairId = matchedDeer?.let { pairId(it.note) ?: UUID.randomUUID().toString() }
-                                    if (matchedDeer != null && deerPairId != null && pairId(matchedDeer!!.note) == null) dao.updateMarker(matchedDeer!!.copy(note = matchedDeer!!.note + "; pair=$deerPairId"))
+                                    val deerPairId = matchedDeer?.let { UUID.randomUUID().toString() }
+                                    if (matchedDeer != null && deerPairId != null) dao.updateMarker(matchedDeer.copy(note = matchedDeer.note + "; pair=$deerPairId"))
                                     dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = "deer_zone_enter", note = "Deer zone entering; bearing=${bearing?.roundToInt() ?: -1}" + (deerPairId?.let { "; pair=$it" } ?: "")))
-                                    if (paired) ToneGenerator(AudioManager.STREAM_NOTIFICATION, 90).apply { startTone(ToneGenerator.TONE_PROP_BEEP2, 220); android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ release() }, 300) }
-                                    speakPrompt(if (paired) "Deer zone captured" else "Deer zone marked")
+                                    if (matchedDeer != null) ToneGenerator(AudioManager.STREAM_NOTIFICATION, 90).apply { startTone(ToneGenerator.TONE_PROP_BEEP2, 220); android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ release() }, 300) }
+                                    speakPrompt(if (matchedDeer != null) "Deer zone captured" else "Deer zone marked")
                                 }
                             }
                         }, enabled = activeDriveId != null, modifier = Modifier.weight(1f).height(48.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), colors = ButtonDefaults.buttonColors(containerColor = flashingButtonColor("deer" in activeRoadAlerts, Color(0xFFE3F2E6)), contentColor = Color(0xFF263238))) { Text("🦌", fontSize = 29.sp, color = Color(0xFF263238)) }
@@ -757,9 +819,7 @@ private fun RouteCollectorScreen() {
                                         speakPrompt(if (advance) "$markerSpeed kilometre advance sign marked" else "$markerSpeed kilometre zone start marked")
                                     }
                                 }
-                            }, colors = ButtonDefaults.buttonColors(
-                                containerColor = flashingButtonColor(overSpeedActive, MaterialTheme.colorScheme.primary)
-                            )) { Text("Set") }
+                            }) { Text("Set") }
                     }
                     if (showSettings) {
                         Text("Settings", style = MaterialTheme.typography.labelMedium)
@@ -948,14 +1008,10 @@ private fun RouteCollectorScreen() {
                                         val lat = TrackingState.latestLat.value
                                         val lon = TrackingState.latestLon.value
                                         val deer = dao.getDeerZoneMarkers()
-                                        val nearest = if (lat != null && lon != null) deer.minByOrNull { marker ->
+                                        deerDeleteTarget = if (lat != null && lon != null) deer.minByOrNull { marker ->
                                             FloatArray(1).also { android.location.Location.distanceBetween(lat, lon, marker.latitude, marker.longitude, it) }[0]
                                         } else null
-                                        val id = nearest?.let { pairId(it.note) }
-                                        if (id != null) deer.filter { pairId(it.note) == id }.forEach { dao.deleteMarker(it.id) }
-                                        else if (nearest != null) dao.deleteMarker(nearest.id)
-                                        TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
-                                        speakPrompt(if (nearest != null) "Deer zone deleted" else "No deer zone found")
+                                        if (deerDeleteTarget == null) speakPrompt("No deer zone found")
                                     }
                                 }) { Text("Delete") }
                             }

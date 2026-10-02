@@ -58,7 +58,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val OSM_SPEED_MOVING_REFRESH_MILLIS = 30_000L
         private const val SPEED_RECOVERY_HYSTERESIS_KPH = 2f
         private const val ZONE_TURN_EXIT_DEGREES = 65f
-        private const val DEER_PAIR_MAX_METRES = 20_000f
+        private const val DEER_PAIR_MAX_METRES = 5_000f
         private const val PEDESTRIAN_MIN_WARNING_METRES = 120f
         private const val PEDESTRIAN_MAX_WARNING_METRES = 350f
     }
@@ -251,16 +251,17 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         }
         val tolerance = getSpeedTolerance(posted)
         val threshold = posted + tolerance
-        val shouldWarn = actual > threshold
+        val displayedActual = actual.toInt()
+        val shouldWarn = displayedActual > threshold
         Log.d(
             "RouteCollectorSpeed",
-            "posted=$posted tolerance=$tolerance threshold=$threshold actual=${"%.1f".format(Locale.US, actual)} warn=$shouldWarn active=$overSpeedAlertActive"
+            "posted=$posted tolerance=$tolerance threshold=$threshold actual=${"%.1f".format(Locale.US, actual)} displayed=$displayedActual warn=$shouldWarn active=$overSpeedAlertActive"
         )
         if (!overSpeedAlertActive && shouldWarn) {
             overSpeedAlertActive = true
             TrackingState.overSpeedActive.value = true
             warningTone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 300)
-            speak("Speed warning. ${actual.toInt()} in a $posted zone")
+            speak("Speed warning. $displayedActual in a $posted zone")
         } else if (overSpeedAlertActive && actual <= threshold - SPEED_RECOVERY_HYSTERESIS_KPH) {
             overSpeedAlertActive = false
             TrackingState.overSpeedActive.value = false
@@ -290,12 +291,23 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private fun handleDeerZoneFact(fact: MarkerEntity, deerFacts: List<MarkerEntity>, distance: Float, approaching: Boolean) {
         if (fact.id in announcedMarkerIds || !approaching || distance > ACTIVE_ZONE_RADIUS_METRES) return
         val savedBearing = parseCapturedBearing(fact.note) ?: return
-        val paired = deerFacts.any { other ->
-            if (other.id == fact.id) return@any false; val otherBearing = parseCapturedBearing(other.note) ?: return@any false; val out = FloatArray(1); Location.distanceBetween(fact.latitude, fact.longitude, other.latitude, other.longitude, out); out[0] <= DEER_PAIR_MAX_METRES && bearingDifference(savedBearing, otherBearing) >= REVERSE_DIRECTION_MIN_DEGREES
+        val pairToken = Regex("pair=([A-Za-z0-9-]+)").find(fact.note)?.groupValues?.getOrNull(1)
+        val paired = if (pairToken != null) {
+            deerFacts.any { other -> other.id != fact.id && Regex("pair=([A-Za-z0-9-]+)").find(other.note)?.groupValues?.getOrNull(1) == pairToken }
+        } else {
+            deerFacts.asSequence()
+                .filter { it.id != fact.id && !it.note.contains("pair=") }
+                .mapNotNull { other ->
+                    val otherBearing = parseCapturedBearing(other.note) ?: return@mapNotNull null
+                    val out = FloatArray(1)
+                    Location.distanceBetween(fact.latitude, fact.longitude, other.latitude, other.longitude, out)
+                    if (out[0] <= DEER_PAIR_MAX_METRES && bearingDifference(savedBearing, otherBearing) >= REVERSE_DIRECTION_MIN_DEGREES) out[0] else null
+                }
+                .minOrNull() != null
         }
         if (!paired) return
         val travel = currentTravelBearing ?: return; val difference = bearingDifference(savedBearing, travel)
-        val phrase = when { difference <= SAME_DIRECTION_TOLERANCE_DEGREES -> if (isDeerHighRiskTime()) "Entering deer zone. Use high beams when safe." else "Entering deer zone"; difference >= REVERSE_DIRECTION_MIN_DEGREES -> "Leaving deer area"; else -> return }
+        val phrase = when { difference <= SAME_DIRECTION_TOLERANCE_DEGREES -> if (isDeerHighRiskTime()) "Entering deer zone. Use high beams when safe." else "Entering deer zone"; difference >= REVERSE_DIRECTION_MIN_DEGREES -> "Deer zone ended"; else -> return }
         announcedMarkerIds += fact.id
         if (difference <= SAME_DIRECTION_TOLERANCE_DEGREES) { TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value + "deer"; TrackingState.rememberZone(fact.id, "deer", "Deer crossing area", fact.note) }
         else TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"

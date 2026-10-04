@@ -119,8 +119,6 @@ private fun RouteCollectorScreen() {
     val points by pointsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val markers by markersFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
-    var autoStartFixes by remember { mutableIntStateOf(0) }
-    var autoStartLastLocation by remember { mutableStateOf<Location?>(null) }
     val postedSpeed by TrackingState.currentPostedSpeed.collectAsStateWithLifecycle()
     val actualSpeed by TrackingState.latestSpeedKph.collectAsStateWithLifecycle()
     val collectedSpeed by TrackingState.currentSpeedIsCollected.collectAsStateWithLifecycle()
@@ -370,55 +368,6 @@ private fun RouteCollectorScreen() {
         }
     }
 
-    DisposableEffect(activeDriveId) {
-        if (activeDriveId != null || ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            onDispose { }
-        } else {
-            val client = LocationServices.getFusedLocationProviderClient(context)
-            val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2_000L)
-                .setMinUpdateIntervalMillis(1_000L)
-                .setMinUpdateDistanceMeters(5f)
-                .build()
-            val callback = object : LocationCallback() {
-                override fun onLocationResult(result: LocationResult) {
-                    result.locations.forEach { location ->
-                        if (!location.hasAccuracy() || location.accuracy > 25f) {
-                            autoStartFixes = 0
-                            autoStartLastLocation = Location(location)
-                            return@forEach
-                        }
-                        val speedKph = if (location.hasSpeed()) location.speed * 3.6f else {
-                            val previous = autoStartLastLocation
-                            if (previous != null && location.time > previous.time) {
-                                previous.distanceTo(location) / ((location.time - previous.time) / 1000f) * 3.6f
-                            } else 0f
-                        }
-                        autoStartLastLocation = Location(location)
-                        autoStartFixes = if (speedKph >= 15f) autoStartFixes + 1 else 0
-                        if (autoStartFixes >= 3 && TrackingState.activeDriveId.value == null) {
-                            autoStartFixes = 0
-                            scope.launch {
-                                val id = dao.insertDrive(DriveEntity(startedAt = System.currentTimeMillis()))
-                                dao.pruneOldDrives(10)
-                                selectedHistoryDriveId = null
-                                ContextCompat.startForegroundService(context, Intent(context, DriveTrackingService::class.java).apply {
-                                    action = DriveTrackingService.ACTION_START
-                                    putExtra(DriveTrackingService.EXTRA_DRIVE_ID, id)
-                                })
-                                TrackingState.postDriverAlert("Driving mode automatically started", kind = "auto_start")
-                                context.startService(Intent(context, DriveTrackingService::class.java).apply {
-                                    action = DriveTrackingService.ACTION_SPEAK
-                                    putExtra(DriveTrackingService.EXTRA_SPEAK_TEXT, "Driving mode automatically started")
-                                })
-                            }
-                        }
-                    }
-                }
-            }
-            client.requestLocationUpdates(request, callback, Looper.getMainLooper())
-            onDispose { client.removeLocationUpdates(callback) }
-        }
-    }
 
     LaunchedEffect(Unit) {
         val wanted = buildList {
@@ -672,7 +621,7 @@ private fun RouteCollectorScreen() {
                                         val saved = Regex("bearing=(-?\\d+)").find(other.note)?.groupValues?.getOrNull(1)?.toFloatOrNull()?.takeIf { it >= 0f } ?: return@mapNotNull null
                                         val dist = FloatArray(1)
                                         android.location.Location.distanceBetween(point.latitude, point.longitude, other.latitude, other.longitude, dist)
-                                        if (dist[0] > 5_000f) return@mapNotNull null
+                                        if (dist[0] > 2_000f) return@mapNotNull null
                                         val raw = abs((((bearing % 360f) + 360f) % 360f) - (((saved % 360f) + 360f) % 360f))
                                         DeerCandidate(other, dist[0], if (raw > 180f) 360f - raw else raw)
                                     } else emptyList()

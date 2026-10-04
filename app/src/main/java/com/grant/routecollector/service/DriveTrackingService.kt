@@ -58,7 +58,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val OSM_SPEED_MOVING_REFRESH_MILLIS = 30_000L
         private const val SPEED_RECOVERY_HYSTERESIS_KPH = 2f
         private const val ZONE_TURN_EXIT_DEGREES = 65f
-        private const val DEER_PAIR_MAX_METRES = 5_000f
+        private const val DEER_PAIR_MAX_METRES = 2_000f
         private const val PEDESTRIAN_MIN_WARNING_METRES = 120f
         private const val PEDESTRIAN_MAX_WARNING_METRES = 350f
     }

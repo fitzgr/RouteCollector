@@ -57,6 +57,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val OSM_SPEED_RETRY_MILLIS = 30_000L
         private const val OSM_SPEED_MOVING_REFRESH_MILLIS = 30_000L
         private const val SPEED_RECOVERY_HYSTERESIS_KPH = 2f
+        private const val OVERSPEED_CONFIRM_MILLIS = 3_000L
         private const val ZONE_TURN_EXIT_DEGREES = 65f
         private const val DEER_PAIR_MAX_METRES = 2_000f
         private const val PEDESTRIAN_MIN_WARNING_METRES = 120f
@@ -83,6 +84,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
     private val markerBearingCache = mutableMapOf<Long, Float?>()
     private var currentSpeedLimit: Int? = null
     private var overSpeedAlertActive = false
+    private var overSpeedSinceElapsedRealtime: Long? = null
+    private val activeDeerPairIds = mutableSetOf<String>()
     private var noMovementSinceElapsedRealtime: Long? = null
     private var noMovementAnchor: Location? = null
     private var drivingWasConfirmed = false
@@ -120,7 +123,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
                 driveId = intent.getLongExtra(EXTRA_DRIVE_ID, -1L).takeIf { it > 0 }
                 driveId?.let {
                     warnedReductionMarkerIds.clear(); announcedMarkerIds.clear(); warnedCameraMarkerIds.clear(); verifiedCameraMarkerIds.clear(); camerasCurrentlyInRange.clear(); passiveReverseMarkerIds.clear(); previousMarkerDistances.clear(); markerBearingCache.clear()
-                    previousLocationForBearing = null; currentTravelBearing = null; currentSpeedLimit = null; overSpeedAlertActive = false; noMovementSinceElapsedRealtime = null; noMovementAnchor = null; drivingWasConfirmed = false; lastOsmSpeedAttemptElapsedRealtime = 0L; osmSpeedLookupInFlight = false; speedZoneManuallyCleared = false; lastSpeedRoadBearing = null; resolvedRoadName = null; collectedSpeedRoadName = null
+                    previousLocationForBearing = null; currentTravelBearing = null; currentSpeedLimit = null; overSpeedAlertActive = false; overSpeedSinceElapsedRealtime = null; activeDeerPairIds.clear(); noMovementSinceElapsedRealtime = null; noMovementAnchor = null; drivingWasConfirmed = false; lastOsmSpeedAttemptElapsedRealtime = 0L; osmSpeedLookupInFlight = false; speedZoneManuallyCleared = false; lastSpeedRoadBearing = null; resolvedRoadName = null; collectedSpeedRoadName = null
                     TrackingState.recentZones.value = emptyList(); TrackingState.walkingAutoStopSeconds.value = null; TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); TrackingState.currentSpeedIsCollected.value = false; TrackingState.activeDriveId.value = it
                     startForeground(NOTIFICATION_ID, buildNotification()); beginUpdates()
                 }
@@ -253,17 +256,23 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         val threshold = posted + tolerance
         val displayedActual = actual.toInt()
         val shouldWarn = displayedActual > threshold
+        val now = SystemClock.elapsedRealtime()
+        if (!shouldWarn) overSpeedSinceElapsedRealtime = null
+        else if (!overSpeedAlertActive && overSpeedSinceElapsedRealtime == null) overSpeedSinceElapsedRealtime = now
+        val sustainedMillis = overSpeedSinceElapsedRealtime?.let { now - it } ?: 0L
         Log.d(
             "RouteCollectorSpeed",
-            "posted=$posted tolerance=$tolerance threshold=$threshold actual=${"%.1f".format(Locale.US, actual)} displayed=$displayedActual warn=$shouldWarn active=$overSpeedAlertActive"
+            "posted=$posted tolerance=$tolerance threshold=$threshold actual=${"%.1f".format(Locale.US, actual)} displayed=$displayedActual warn=$shouldWarn sustainedMs=$sustainedMillis active=$overSpeedAlertActive"
         )
-        if (!overSpeedAlertActive && shouldWarn) {
+        if (!overSpeedAlertActive && shouldWarn && sustainedMillis >= OVERSPEED_CONFIRM_MILLIS) {
             overSpeedAlertActive = true
+            overSpeedSinceElapsedRealtime = null
             TrackingState.overSpeedActive.value = true
             warningTone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 300)
             speak("Speed warning. $displayedActual in a $posted zone")
-        } else if (overSpeedAlertActive && actual <= threshold - SPEED_RECOVERY_HYSTERESIS_KPH) {
+        } else if (overSpeedAlertActive && displayedActual <= threshold - SPEED_RECOVERY_HYSTERESIS_KPH) {
             overSpeedAlertActive = false
+            overSpeedSinceElapsedRealtime = null
             TrackingState.overSpeedActive.value = false
             recoveryTone.startTone(ToneGenerator.TONE_PROP_ACK, 180)
             speak("Good")
@@ -309,9 +318,18 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener {
         val travel = currentTravelBearing ?: return; val difference = bearingDifference(savedBearing, travel)
         val phrase = when { difference <= SAME_DIRECTION_TOLERANCE_DEGREES -> if (isDeerHighRiskTime()) "Entering deer zone. Use high beams when safe." else "Entering deer zone"; difference >= REVERSE_DIRECTION_MIN_DEGREES -> "Deer zone ended"; else -> return }
         announcedMarkerIds += fact.id
-        if (difference <= SAME_DIRECTION_TOLERANCE_DEGREES) { TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value + "deer"; TrackingState.rememberZone(fact.id, "deer", "Deer crossing area", fact.note) }
-        else TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
-        speak(phrase)
+        if (difference <= SAME_DIRECTION_TOLERANCE_DEGREES) {
+            pairToken?.let { activeDeerPairIds += it }
+            TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value + "deer"
+            TrackingState.rememberZone(fact.id, "deer", "Deer crossing area", fact.note)
+            speak(phrase)
+        } else {
+            pairToken?.let { activeDeerPairIds -= it }
+            if (activeDeerPairIds.isEmpty()) {
+                TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
+                speak("Deer zone ended")
+            }
+        }
     }
 
     private fun clearCollectedSpeedAfterTurn(location: Location) {

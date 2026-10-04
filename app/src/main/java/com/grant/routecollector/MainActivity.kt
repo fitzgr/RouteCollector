@@ -861,9 +861,15 @@ private fun RouteCollectorScreen() {
                     }
                     if (recentZones.isNotEmpty()) {
                         Text("Recent zones", style = MaterialTheme.typography.labelMedium)
-                        recentZones.forEach { zone ->
+                        recentZones.forEachIndexed { index, zone ->
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text(zone.label, modifier = Modifier.weight(1f), maxLines = 1)
+                                val recentLabel = if (zone.kind == "passing") "Oncoming traffic" else zone.label
+                                Text(recentLabel, modifier = Modifier.weight(1f), maxLines = 1)
+                                if (index == 0 && recentZones.size > 1) {
+                                    TextButton(onClick = {
+                                        recentZones.toList().forEach { recent -> TrackingState.dismissRecentZone(recent.markerId) }
+                                    }) { Text("Keep all") }
+                                }
                                 TextButton(onClick = { TrackingState.dismissRecentZone(zone.markerId) }) { Text("Keep") }
                                 TextButton(onClick = {
                                     scope.launch {
@@ -876,7 +882,7 @@ private fun RouteCollectorScreen() {
                                             "deer" -> TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
                                             "speed" -> context.startService(Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_CLEAR_SPEED_ZONE })
                                         }
-                                        speakPrompt(if (targets.isNotEmpty()) "${zone.label} deleted" else "Zone already removed")
+                                        speakPrompt(if (targets.isNotEmpty()) "$recentLabel deleted" else "Zone already removed")
                                     }
                                 }) { Text("Delete") }
                             }

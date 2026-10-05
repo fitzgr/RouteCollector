@@ -6,10 +6,6 @@ on:
     branches:
       - main
       - feature/google-maps-overlay
-  pull_request:
-    branches:
-      - main
-
 permissions:
   contents: write
 
@@ -24,7 +20,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -33,7 +29,6 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Restore desktop debug keystore
-        if: github.event_name != 'pull_request'
         env:
           ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
         run: |
@@ -50,7 +45,6 @@ jobs:
           ./gradlew assembleDebug
 
       - name: Verify APK signing certificate
-        if: github.event_name != 'pull_request'
         run: |
           EXPECTED_SHA256="4671C8D0EFCF6B53D84D6F72C8F9D99B22623EDE4FE2D35F9566846C9E988B31"
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
@@ -60,7 +54,6 @@ jobs:
           test "$ACTUAL_SHA256" = "$EXPECTED_SHA256"
 
       - name: Publish stable latest-debug release
-        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -106,7 +99,6 @@ jobs:
           fi
 
       - name: Verify published updater assets
-        if: github.event_name != 'pull_request'
         run: |
           MANIFEST_URL="https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json"
           APK_URL="https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/routecollector-debug.apk"

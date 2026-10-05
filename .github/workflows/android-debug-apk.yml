@@ -49,9 +49,21 @@ jobs:
           EXPECTED_SHA256="4671C8D0EFCF6B53D84D6F72C8F9D99B22623EDE4FE2D35F9566846C9E988B31"
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
           test -n "$APKSIGNER"
-          ACTUAL_SHA256="$("$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{gsub(":","",$2); print toupper($2); exit}')"
+
+          # Keep the complete apksigner output visible in the Actions log. Newer
+          # build-tools can vary the signer label formatting, so extract the
+          # digest by its field name rather than a single exact output string.
+          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk | tee /tmp/apksigner-output.txt
+          ACTUAL_SHA256="$(sed -nE 's/^.*certificate SHA-256 digest:[[:space:]]*//Ip' /tmp/apksigner-output.txt | head -1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          if [ -z "$ACTUAL_SHA256" ]; then
+            echo "::error::apksigner verified the APK but no SHA-256 certificate digest could be parsed."
+            exit 1
+          fi
           echo "Built APK signer SHA-256: $ACTUAL_SHA256"
-          test "$ACTUAL_SHA256" = "$EXPECTED_SHA256"
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "::error::APK signer does not match the desktop debug certificate required for in-place updates."
+            exit 1
+          fi
 
       - name: Publish stable latest-debug release
         env:

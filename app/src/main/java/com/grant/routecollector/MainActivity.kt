@@ -112,6 +112,7 @@ private fun RouteCollectorScreen() {
     var historyMarkerEdit by remember { mutableStateOf<MarkerEntity?>(null) }
     var historySegmentSpeed by remember { mutableIntStateOf(60) }
     var historyEditMode by remember { mutableStateOf("point") }
+    var showHistoryEditor by remember { mutableStateOf(false) }
 
     val effectiveDriveId = activeDriveId ?: selectedHistoryDriveId ?: drives.firstOrNull()?.id
     val pointsFlow = remember(effectiveDriveId) { effectiveDriveId?.let { dao.observePoints(it) } ?: flowOf(emptyList()) }
@@ -387,7 +388,7 @@ private fun RouteCollectorScreen() {
                         val markerCount = if (drive.id == effectiveDriveId) markers.size else null
                         val elapsed = ((drive.endedAt ?: System.currentTimeMillis()) - drive.startedAt).coerceAtLeast(0L)
                         val minutes = elapsed / 60_000L
-                        TextButton(onClick = { selectedHistoryDriveId = drive.id; showHistory = false }, modifier = Modifier.fillMaxWidth()) {
+                        TextButton(onClick = { selectedHistoryDriveId = drive.id; showHistory = false; showHistoryEditor = true; historySegmentPoint = null; historySegmentEnd = null }, modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.fillMaxWidth()) {
                                 val dateText = DateFormat.getDateInstance(DateFormat.SHORT).format(Date(drive.startedAt))
                                 val timeFormat = DateFormat.getTimeInstance(DateFormat.SHORT)
@@ -529,6 +530,66 @@ private fun RouteCollectorScreen() {
                 }
             }
         )
+    }
+
+    if (showHistoryEditor && activeDriveId == null && selectedHistoryDriveId != null) {
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background, tonalElevation = 6.dp) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text("History editor", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    Button(onClick = { historyEditMode = "point"; historySegmentPoint = null; historySegmentEnd = null }) { Text(if (historyEditMode == "point") "✓ Points" else "Points") }
+                    Button(onClick = { historyEditMode = "segment"; historySegmentPoint = null; historySegmentEnd = null }) { Text(if (historyEditMode == "segment") "✓ Speed" else "Speed") }
+                    TextButton(onClick = {
+                        showHistoryEditor = false
+                        selectedHistoryDriveId = null
+                        historySegmentPoint = null
+                        historySegmentEnd = null
+                        historyPointEdit = null
+                        historyMarkerEdit = null
+                    }) { Text("Done") }
+                }
+                Text(
+                    if (historyEditMode == "point") "Pinch to zoom and pan. Tap a route point or marker to edit it."
+                    else if (historySegmentPoint == null) "Pinch to zoom and tap the first point of the speed segment."
+                    else "Tap the second point of the speed segment.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                )
+                HorizontalDivider()
+                Box(Modifier.fillMaxWidth().weight(1f)) {
+                    RouteMap(
+                        points = points,
+                        markers = markers,
+                        currentLat = null,
+                        currentLon = null,
+                        travelBearing = null,
+                        activeZones = emptySet(),
+                        postedSpeed = null,
+                        collectedSpeedActive = false,
+                        activeRoadAlerts = emptySet(),
+                        actualSpeedKph = null,
+                        fitRoute = true,
+                        onHistoryPointSelected = { point ->
+                            if (historyEditMode == "segment") {
+                                if (historySegmentPoint == null) historySegmentPoint = point else historySegmentEnd = point
+                            } else {
+                                historyPointEdit = point
+                                historyPointLat = point.latitude.toString()
+                                historyPointLon = point.longitude.toString()
+                            }
+                        },
+                        historySegmentStart = historySegmentPoint,
+                        onHistoryMarkerSelected = { marker -> historyMarkerEdit = marker },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+        }
+        return
     }
 
     Scaffold { padding ->

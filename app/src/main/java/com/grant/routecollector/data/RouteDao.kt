@@ -9,10 +9,10 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface RouteDao {
     @Insert suspend fun insertDrive(drive: DriveEntity): Long
-    @Update suspend fun updateDrive(drive: DriveEntity)
-    @Update suspend fun updateMarker(marker: MarkerEntity)
-    @Update suspend fun updatePoint(point: TrackPointEntity)
-    @Insert suspend fun insertPoint(point: TrackPointEntity)
+    @Update suspend fun updateDrive(drive: DriveEntity): Int
+    @Update suspend fun updateMarker(marker: MarkerEntity): Int
+    @Update suspend fun updatePoint(point: TrackPointEntity): Int
+    @Insert suspend fun insertPoint(point: TrackPointEntity): Long
     @Insert suspend fun insertMarker(marker: MarkerEntity): Long
 
     @Query("SELECT * FROM drives ORDER BY startedAt DESC")

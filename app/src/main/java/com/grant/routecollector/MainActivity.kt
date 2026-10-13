@@ -6,6 +6,11 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Looper
 import android.location.Location
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.net.Uri
 import androidx.core.content.FileProvider
@@ -58,6 +63,21 @@ import java.util.UUID
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
+
+private data class DriveSummary(
+    val driveId: Long,
+    val startedAt: Long,
+    val endedAt: Long,
+    val durationMillis: Long,
+    val distanceKm: Double,
+    val averageSpeedKph: Double,
+    val maxSpeedKph: Double,
+    val hardBrakeCount: Int,
+    val strongestBrakeG: Float,
+    val thresholdG: Float,
+    val startLabel: String,
+    val endLabel: String
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -124,6 +144,9 @@ private fun RouteCollectorScreen() {
     val actualSpeed by TrackingState.latestSpeedKph.collectAsStateWithLifecycle()
     val collectedSpeed by TrackingState.currentSpeedIsCollected.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
+    var driveSummary by remember { mutableStateOf<DriveSummary?>(null) }
+    var autoStartArmed by remember { mutableStateOf(true) }
+    var autoStartInProgress by remember { mutableStateOf(false) }
     var updateStatus by remember { mutableStateOf("Not checked") }
     var updateWebUrl by remember { mutableStateOf<String?>(null) }
     var latestBuildLabel by remember { mutableStateOf<String?>(null) }
@@ -277,6 +300,7 @@ private fun RouteCollectorScreen() {
     var cameraWarning by remember { mutableIntStateOf(prefs.getInt("red_light_camera_warning_metres", 200)) }
     var toleranceSpeed by remember { mutableIntStateOf(60) }
     var toleranceValue by remember { mutableIntStateOf(prefs.getInt("speed_tolerance_60", 8)) }
+    var hardBrakeThresholdG by remember { mutableFloatStateOf(prefs.getFloat("hard_brake_threshold_g", 0.30f)) }
     var markerSpeed by remember { mutableStateOf(60) }
     var pendingSpeedChosen by remember { mutableStateOf(false) }
     var markerType by remember { mutableStateOf("Zone begins") }
@@ -286,6 +310,10 @@ private fun RouteCollectorScreen() {
     val walkingCountdown by TrackingState.walkingAutoStopSeconds.collectAsStateWithLifecycle()
     val driverAlert by TrackingState.driverAlert.collectAsStateWithLifecycle()
     val recentZones by TrackingState.recentZones.collectAsStateWithLifecycle()
+    val hardBrakeActive by TrackingState.hardBrakeActive.collectAsStateWithLifecycle()
+    val hardBrakeG by TrackingState.hardBrakeG.collectAsStateWithLifecycle()
+    val hardBrakeCount by TrackingState.hardBrakeCount.collectAsStateWithLifecycle()
+    val completedDriveId by TrackingState.completedDriveId.collectAsStateWithLifecycle()
     val travelBearing by TrackingState.latestBearingDegrees.collectAsStateWithLifecycle()
     val latestLat by TrackingState.latestLat.collectAsStateWithLifecycle()
     val latestLon by TrackingState.latestLon.collectAsStateWithLifecycle()
@@ -298,6 +326,119 @@ private fun RouteCollectorScreen() {
     )
     fun flashingButtonColor(active: Boolean, normal: Color): Color =
         if (active && alertFlashPhase >= 0.5f) Color(0xFFFFB300) else normal
+
+
+    LaunchedEffect(completedDriveId) {
+        val id = completedDriveId ?: return@LaunchedEffect
+        delay(500)
+        val drive = dao.getDrive(id) ?: return@LaunchedEffect
+        val tripPoints = dao.getPointsForDrive(id)
+        val brakes = dao.getHardBrakesForDrive(id)
+        if (tripPoints.isNotEmpty()) {
+            var metres = 0.0
+            tripPoints.zipWithNext().forEach { (a, b) ->
+                val out = FloatArray(1)
+                Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, out)
+                metres += out[0]
+            }
+            val speeds = tripPoints.mapNotNull { it.speedMps?.times(3.6f)?.toDouble() }
+            fun brakeValue(note: String): Float = Regex("g=([0-9.]+)").find(note)?.groupValues?.getOrNull(1)?.toFloatOrNull() ?: 0f
+            fun thresholdValue(note: String): Float = Regex("thresholdG=([0-9.]+)").find(note)?.groupValues?.getOrNull(1)?.toFloatOrNull() ?: hardBrakeThresholdG
+            val first = tripPoints.first(); val last = tripPoints.last()
+            val ended = drive.endedAt ?: last.timestamp
+            driveSummary = DriveSummary(
+                driveId = id,
+                startedAt = drive.startedAt,
+                endedAt = ended,
+                durationMillis = (ended - drive.startedAt).coerceAtLeast(0L),
+                distanceKm = metres / 1000.0,
+                averageSpeedKph = speeds.average().takeIf { !it.isNaN() } ?: 0.0,
+                maxSpeedKph = speeds.maxOrNull() ?: 0.0,
+                hardBrakeCount = brakes.size,
+                strongestBrakeG = brakes.maxOfOrNull { brakeValue(it.note) } ?: 0f,
+                thresholdG = brakes.lastOrNull()?.let { thresholdValue(it.note) } ?: hardBrakeThresholdG,
+                startLabel = "%.5f, %.5f".format(Locale.CANADA, first.latitude, first.longitude),
+                endLabel = "%.5f, %.5f".format(Locale.CANADA, last.latitude, last.longitude)
+            )
+        }
+        TrackingState.completedDriveId.value = null
+    }
+
+    DisposableEffect(activeDriveId, autoStartArmed) {
+        if (activeDriveId != null || !autoStartArmed ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            onDispose { }
+        } else {
+            val fused = LocationServices.getFusedLocationProviderClient(context)
+            val sensors = context.getSystemService(android.content.Context.SENSOR_SERVICE) as SensorManager
+            var lastMotionAt = 0L
+            var speedSince = 0L
+            val sensorListener = object : SensorEventListener {
+                override fun onSensorChanged(event: SensorEvent) {
+                    if (event.sensor.type != Sensor.TYPE_LINEAR_ACCELERATION) return
+                    val magnitude = kotlin.math.sqrt(event.values[0] * event.values[0] + event.values[1] * event.values[1] + event.values[2] * event.values[2])
+                    if (magnitude >= 0.5f) lastMotionAt = SystemClock.elapsedRealtime()
+                }
+                override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+            }
+            sensors.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)?.let { sensors.registerListener(sensorListener, it, SensorManager.SENSOR_DELAY_NORMAL) }
+            val autoCallback = object : LocationCallback() {
+                override fun onLocationResult(result: LocationResult) {
+                    if (autoStartInProgress || TrackingState.activeDriveId.value != null) return
+                    val loc = result.lastLocation ?: return
+                    val speedKph = if (loc.hasSpeed()) loc.speed * 3.6f else 0f
+                    val now = SystemClock.elapsedRealtime()
+                    val motionRecent = now - lastMotionAt <= 8_000L
+                    if (speedKph >= 10f && motionRecent) {
+                        if (speedSince == 0L) speedSince = now
+                        if (now - speedSince >= 4_000L) {
+                            autoStartInProgress = true
+                            scope.launch {
+                                val id = dao.insertDrive(DriveEntity(startedAt = System.currentTimeMillis(), title = "Auto-detected drive"))
+                                dao.pruneOldDrives(10)
+                                selectedHistoryDriveId = null
+                                ContextCompat.startForegroundService(context, Intent(context, DriveTrackingService::class.java).apply {
+                                    action = DriveTrackingService.ACTION_START
+                                    putExtra(DriveTrackingService.EXTRA_DRIVE_ID, id)
+                                })
+                                TrackingState.postDriverAlert("Drive detected — recording started", kind = "auto_start")
+                                autoStartInProgress = false
+                            }
+                        }
+                    } else speedSince = 0L
+                }
+            }
+            val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 3_000L).setMinUpdateIntervalMillis(2_000L).build()
+            fused.requestLocationUpdates(request, autoCallback, Looper.getMainLooper())
+            onDispose {
+                fused.removeLocationUpdates(autoCallback)
+                sensors.unregisterListener(sensorListener)
+            }
+        }
+    }
+
+    driveSummary?.let { summary ->
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("Drive summary") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val mins = summary.durationMillis / 60_000
+                    Text("Duration: " + (mins / 60) + "h " + (mins % 60) + "m")
+                    Text("Distance: %.1f km".format(Locale.CANADA, summary.distanceKm))
+                    Text("Average speed: %.1f km/h".format(Locale.CANADA, summary.averageSpeedKph))
+                    Text("Maximum speed: %.0f km/h".format(Locale.CANADA, summary.maxSpeedKph))
+                    Text("Hard braking: " + summary.hardBrakeCount)
+                    if (summary.hardBrakeCount > 0) Text("Strongest brake: %.2f g".format(Locale.CANADA, summary.strongestBrakeG))
+                    Text("Braking threshold used: %.2f g".format(Locale.CANADA, summary.thresholdG))
+                    Text("From: " + summary.startLabel, style = MaterialTheme.typography.bodySmall)
+                    Text("To: " + summary.endLabel, style = MaterialTheme.typography.bodySmall)
+                    Text("Hard-brake events are stored with GPS positions for comparison with Ajusto.", style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = { TextButton(onClick = { driveSummary = null }) { Text("OK") } }
+        )
+    }
 
     suspend fun saveBoundaryMarker(marker: MarkerEntity) {
         if (marker.kind in setOf("speed","speed_advance","community_safety_zone_start","community_safety_zone_end","senior_safety_zone_start","senior_safety_zone_end","red_light_camera","camera")) {
@@ -605,10 +746,12 @@ private fun RouteCollectorScreen() {
                         Text("Route Collector", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                         Button(onClick = {
                             if (activeDriveId == null) scope.launch {
+                                autoStartArmed = true
                                 val id = dao.insertDrive(DriveEntity(startedAt = System.currentTimeMillis()))
                                 dao.pruneOldDrives(10); selectedHistoryDriveId = null
                                 ContextCompat.startForegroundService(context, Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_START; putExtra(DriveTrackingService.EXTRA_DRIVE_ID, id) })
                             } else {
+                                autoStartArmed = false
                                 context.startService(Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_STOP })
                                 TrackingState.postDriverAlert("Drive saved", kind = "drive_saved")
                                 context.stopService(Intent(context, CollectorOverlayService::class.java)); context.stopService(Intent(context, RouteMarkerMapOverlayService::class.java))
@@ -641,6 +784,13 @@ private fun RouteCollectorScreen() {
                         }
                     }
                     walkingCountdown?.let { Text("No GPS movement • auto-stop in ${it}s", style = MaterialTheme.typography.bodySmall, color = Color(0xFFB26A00)) }
+                    if (activeDriveId != null) {
+                        Text(
+                            if (hardBrakeActive) "⚠ HARD BRAKE  %.2f g".format(Locale.CANADA, hardBrakeG) else "Braking monitor • $hardBrakeCount event" + if (hardBrakeCount == 1) "" else "s",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (hardBrakeActive) Color(0xFFC62828) else Color(0xFF455A64)
+                        )
+                    }
                     cameraCaptureMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF2E7D32)) }
                     Row(
                         Modifier.fillMaxWidth()
@@ -894,6 +1044,20 @@ private fun RouteCollectorScreen() {
                                 TextButton(onClick = { cameraWarning = (cameraWarning + 50).coerceAtMost(500); prefs.edit().putInt("red_light_camera_warning_metres", cameraWarning).apply() }) { Text("+50") }
                             }
                         }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Hard braking: %.2f g".format(Locale.CANADA, hardBrakeThresholdG))
+                            Row {
+                                TextButton(onClick = {
+                                    hardBrakeThresholdG = (hardBrakeThresholdG - 0.05f).coerceAtLeast(0.15f)
+                                    prefs.edit().putFloat("hard_brake_threshold_g", hardBrakeThresholdG).apply()
+                                }) { Text("−") }
+                                TextButton(onClick = {
+                                    hardBrakeThresholdG = (hardBrakeThresholdG + 0.05f).coerceAtMost(0.60f)
+                                    prefs.edit().putFloat("hard_brake_threshold_g", hardBrakeThresholdG).apply()
+                                }) { Text("+") }
+                            }
+                        }
+                        Text("0.30 g is the starting calibration. Compare Route Collector events with Ajusto and tune this over time.", style = MaterialTheme.typography.bodySmall)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Speed tolerance: $toleranceSpeed +$toleranceValue")
                             Row {

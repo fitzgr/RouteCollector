@@ -31,6 +31,10 @@ object TrackingState {
     val walkingAutoStopSeconds = MutableStateFlow<Int?>(null)
     val driverAlert = MutableStateFlow<DriverAlert?>(null)
     val recentZones = MutableStateFlow<List<RecentZone>>(emptyList())
+    val hardBrakeActive = MutableStateFlow(false)
+    val hardBrakeG = MutableStateFlow(0f)
+    val hardBrakeCount = MutableStateFlow(0)
+    val completedDriveId = MutableStateFlow<Long?>(null)
 
     fun rememberZone(markerId: Long, kind: String, label: String, note: String) {
         val pair = Regex("pair=([A-Za-z0-9-]+)").find(note)?.groupValues?.getOrNull(1)

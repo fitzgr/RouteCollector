@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Looper
 import android.location.Location
+import android.location.Geocoder
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -808,12 +809,12 @@ private fun RouteCollectorScreen() {
                                 cameraCaptureBusy = true
                                 scope.launch {
                                 dao.latestPoint(driveId)?.let { point ->
-                                    val snap = IntersectionSnapper.findNearestIntersection(point.latitude, point.longitude)
+                                    val snap = IntersectionSnapper.findNearestIntersection(Geocoder(context, Locale.CANADA), point.latitude, point.longitude)
                                     saveBoundaryMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = snap?.latitude ?: point.latitude, longitude = snap?.longitude ?: point.longitude, kind = "red_light_camera", note = snap?.let { "Red light camera — ${it.intersectionName}; observed ${point.latitude},${point.longitude}" } ?: "Red light camera — intersection not confirmed; observed ${point.latitude},${point.longitude}"))
-                                    cameraCaptureMessage = if (snap != null) "✓ Snapped ${snap.distanceMetres.roundToInt()} m → ${snap.intersectionName}" else "⚠ Intersection not confirmed"
+                                    cameraCaptureMessage = if (snap != null) "✓ ${snap.intersectionName}" else "✓ Camera saved • intersection name pending"
                                     cameraSnapPreview = snap?.let { it.latitude to it.longitude }
                                     scope.launch { kotlinx.coroutines.delay(6000); cameraCaptureMessage = null; cameraSnapPreview = null }
-                                    speakPrompt(if (snap != null) "Camera snapped to ${snap.intersectionName}, ${snap.distanceMetres.roundToInt()} metres from capture point" else "Camera marked. Intersection could not be confirmed")
+                                    speakPrompt(if (snap != null) "Camera marked at ${snap.intersectionName}" else "Camera marked. Intersection name pending")
                                 }
                                 kotlinx.coroutines.delay(750)
                                 cameraCaptureBusy = false

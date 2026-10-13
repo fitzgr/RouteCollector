@@ -42,6 +42,17 @@ interface RouteDao {
     @Query("SELECT * FROM markers WHERE driveId = :driveId ORDER BY timestamp")
     fun observeMarkers(driveId: Long): Flow<List<MarkerEntity>>
 
+    @Query("SELECT * FROM track_points WHERE driveId = :driveId ORDER BY timestamp")
+    suspend fun getPointsForDrive(driveId: Long): List<TrackPointEntity>
+
+    @Query("SELECT * FROM markers WHERE driveId = :driveId ORDER BY timestamp")
+    suspend fun getMarkersForDrive(driveId: Long): List<MarkerEntity>
+
+    @Query("SELECT * FROM markers WHERE driveId = :driveId AND kind = 'hard_brake' ORDER BY timestamp")
+    suspend fun getHardBrakesForDrive(driveId: Long): List<MarkerEntity>
+
+
+
     @Query("SELECT * FROM track_points WHERE driveId = :driveId ORDER BY timestamp DESC LIMIT 1")
     suspend fun latestPoint(driveId: Long): TrackPointEntity?
 

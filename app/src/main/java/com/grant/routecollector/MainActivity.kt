@@ -4,6 +4,9 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.app.PictureInPictureParams
+import android.content.res.Configuration
+import android.util.Rational
 import android.os.Looper
 import android.location.Location
 import android.location.Geocoder
@@ -81,9 +84,45 @@ private data class DriveSummary(
 )
 
 class MainActivity : ComponentActivity() {
+    private var pipMode by mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MaterialTheme { RouteCollectorScreen() } }
+        setContent { MaterialTheme { if (pipMode) RouteCollectorPipScreen() else RouteCollectorScreen() } }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (TrackingState.activeDriveId.value != null && !isInPictureInPictureMode) {
+            enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        pipMode = isInPictureInPictureMode
+    }
+}
+
+@Composable
+private fun RouteCollectorPipScreen() {
+    val speed by TrackingState.latestSpeedKph.collectAsStateWithLifecycle()
+    val hardBrakeActive by TrackingState.hardBrakeActive.collectAsStateWithLifecycle()
+    val hardBrakeG by TrackingState.latestHardBrakeG.collectAsStateWithLifecycle()
+    Surface(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column {
+                Text("RECORDING", style = MaterialTheme.typography.labelMedium)
+                Text(if (speed != null) speed!!.roundToInt().toString() + " km/h" else "-- km/h", style = MaterialTheme.typography.headlineMedium)
+            }
+            if (hardBrakeActive) {
+                Text("BRAKE\\n" + "%.2f g".format(Locale.CANADA, hardBrakeG), style = MaterialTheme.typography.titleMedium)
+            }
+        }
     }
 }
 

@@ -13,12 +13,12 @@ Current functionality includes:
 - Foreground GPS drive recording with latitude, longitude, timestamp, accuracy, speed and travel bearing.
 - Manual **Start / Stop** plus automatic driving start after sustained valid driving fixes.
 - Automatic stop after driving has been established and there has been about **10 continuous minutes with no meaningful position movement**.
-- A compact collector UI plus floating overlay intended to coexist with Google Maps.
+- A compact collector UI plus floating overlay intended to coexist with Google Maps.\n- Picture-in-Picture (PiP) mode during active drives, keeping compact speed, recording status and braking feedback visible when Route Collector is backgrounded.
 - Live **Posted / Collected / Actual** speed information.
 - OpenStreetMap road-speed lookup when a collected speed fact is not active.
 - Direction-aware speed-limit facts and advance signs.
-- Per-speed overspeed tolerances based on the live GPS **Actual** speed.
-- Red-light-camera collection with OpenStreetMap/Overpass intersection snapping, on-screen validation and spoken intersection confirmation.
+- Per-speed overspeed tolerances based on the live GPS **Actual** speed.\n- Hard-braking monitoring using phone motion sensors, with a live deceleration value, per-trip event logging, GPS/time context and an adjustable sensitivity threshold.
+- Red-light-camera collection with GPS capture, nearby intersection resolution/geocoding, on-screen validation and spoken intersection confirmation.
 - Deer-area endpoint pairing and direction-aware entry/exit behavior.
 - Pedestrian-crossing collection with speed-adaptive approach warnings, spoken **“Pedestrian crossing ahead”** alerts, and a flashing collector indicator while relevant.
 - Community safety zones.
@@ -265,7 +265,7 @@ The live map uses a dedicated camera pin.
 
 ---
 
-# Spoken and visual alerts
+# Hard-braking monitoring\n\nRoute Collector can monitor deceleration during an active drive and record hard-braking events for later comparison with telematics feedback.\n\nThe design is informed by Desjardins **Ajusto**, which uses technology from **Cambridge Mobile Telematics (CMT)**. Public Desjardins material describes smartphone sensor/GPS-based telematics, but Desjardins does **not** publish the exact numeric hard-braking threshold used by Ajusto. Route Collector therefore does not claim to reproduce Ajusto's proprietary scoring algorithm.\n\nRoute Collector's approach is deliberately measurable and calibratable:\n\n- phone motion-sensor data is used to detect longitudinal deceleration;\n- GPS supplies trip/location/speed context for recorded events;\n- hard-braking intensity is displayed in **g** so test drives can be compared quantitatively;\n- the initial/default experimental sensitivity is approximately **0.30 g** (about **2.94 m/s²** of deceleration);\n- braking sensitivity is adjustable in Settings so it can be tuned against real-world Ajusto results;\n- the threshold used for a trip is retained with the trip/event data so later comparisons remain meaningful;\n- a detected hard-braking event uses the existing temporary Keep/Remove status area rather than permanently consuming another line of the driving UI.\n\nThe **0.30 g** value is a Route Collector starting point, **not a confirmed Desjardins/Ajusto threshold**. The intended calibration workflow is to drive normally, compare Route Collector events with Ajusto's trip/map feedback, and adjust sensitivity over multiple drives.\n\n---\n\n# Spoken and visual alerts
 
 Route Collector uses Android Text-to-Speech for both collection acknowledgements and automatic road alerts.
 
@@ -391,7 +391,7 @@ Cloud/community synchronization and multi-user merge/confidence models are not p
 Current local settings include:
 
 - Visual alerts on/off.
-- Red-light-camera warning distance.
+- Red-light-camera warning distance.\n- Hard-braking sensitivity, with an experimental default around **0.30 g**.
 - Per-posted-speed overspeed tolerance.
 - **Backup JSON** and **Restore JSON** for local route data.
 - Installed/latest build information.

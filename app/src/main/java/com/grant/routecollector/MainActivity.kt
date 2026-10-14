@@ -108,7 +108,7 @@ class MainActivity : ComponentActivity() {
 private fun RouteCollectorPipScreen() {
     val speed by TrackingState.latestSpeedKph.collectAsStateWithLifecycle()
     val hardBrakeActive by TrackingState.hardBrakeActive.collectAsStateWithLifecycle()
-    val hardBrakeG by TrackingState.latestHardBrakeG.collectAsStateWithLifecycle()
+    val hardBrakeG by TrackingState.hardBrakeG.collectAsStateWithLifecycle()
     Surface(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 6.dp),

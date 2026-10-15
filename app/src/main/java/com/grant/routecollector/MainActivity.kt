@@ -127,23 +127,57 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun RouteCollectorPipScreen() {
     val speed by TrackingState.latestSpeedKph.collectAsStateWithLifecycle()
-    val hardBrakeActive by TrackingState.hardBrakeActive.collectAsStateWithLifecycle()
-    val hardBrakeG by TrackingState.hardBrakeG.collectAsStateWithLifecycle()
-    Surface(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column {
-                Text("RECORDING", style = MaterialTheme.typography.labelMedium)
-                Text(if (speed != null) speed!!.roundToInt().toString() + " km/h" else "-- km/h", style = MaterialTheme.typography.headlineMedium)
-            }
-            if (hardBrakeActive) {
-                Text("BRAKE\\n" + "%.2f g".format(Locale.CANADA, hardBrakeG), style = MaterialTheme.typography.titleMedium)
-            }
+    val postedSpeed by TrackingState.currentPostedSpeed.collectAsStateWithLifecycle()
+    val bearing by TrackingState.latestBearingDegrees.collectAsStateWithLifecycle()
+    var recordDotVisible by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(650)
+            recordDotVisible = !recordDotVisible
         }
     }
+
+    val direction = bearing?.let { compassDirection(it) } ?: "--"
+    val arrow = bearing?.let { compassArrow(it) } ?: "·"
+
+    Surface(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                "●",
+                color = Color.Red.copy(alpha = if (recordDotVisible) 1f else 0.18f),
+                style = MaterialTheme.typography.titleLarge
+            )
+            Text(
+                postedSpeed?.toString() ?: "--",
+                style = MaterialTheme.typography.headlineMedium
+            )
+            Text(
+                speed?.roundToInt()?.toString() ?: "--",
+                style = MaterialTheme.typography.headlineMedium
+            )
+            Text(
+                "$arrow $direction",
+                style = MaterialTheme.typography.titleLarge
+            )
+        }
+    }
+}
+
+private fun compassDirection(bearing: Float): String {
+    val normalized = ((bearing % 360f) + 360f) % 360f
+    val directions = arrayOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+    return directions[((normalized + 22.5f) / 45f).toInt() % directions.size]
+}
+
+private fun compassArrow(bearing: Float): String {
+    val normalized = ((bearing % 360f) + 360f) % 360f
+    val arrows = arrayOf("↑", "↗", "→", "↘", "↓", "↙", "←", "↖")
+    return arrows[((normalized + 22.5f) / 45f).toInt() % arrows.size]
 }
 
 @Composable

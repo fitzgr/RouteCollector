@@ -91,11 +91,31 @@ class MainActivity : ComponentActivity() {
         setContent { MaterialTheme { if (pipMode) RouteCollectorPipScreen() else RouteCollectorScreen() } }
     }
 
+    private fun enterDrivingPictureInPicture() {
+        if (TrackingState.activeDriveId.value == null || isInPictureInPictureMode) return
+        runCatching {
+            enterPictureInPictureMode(
+                PictureInPictureParams.Builder()
+                    .setAspectRatio(Rational(16, 9))
+                    .build()
+            )
+        }
+    }
+
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (TrackingState.activeDriveId.value != null && !isInPictureInPictureMode) {
-            enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
+        // Covers Home/Recents on devices that do not reliably auto-enter PiP.
+        enterDrivingPictureInPicture()
+    }
+
+    override fun onStop() {
+        // Back, Home and Recents can take slightly different lifecycle paths across
+        // Android versions. If an active drive is recording, make one last attempt
+        // to leave the activity visible as PiP before it disappears.
+        if (!isChangingConfigurations && !isFinishing) {
+            enterDrivingPictureInPicture()
         }
+        super.onStop()
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {

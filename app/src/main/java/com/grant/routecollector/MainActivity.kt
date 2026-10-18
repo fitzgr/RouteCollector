@@ -28,6 +28,15 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -130,40 +139,107 @@ private fun RouteCollectorPipScreen() {
     val postedSpeed by TrackingState.currentPostedSpeed.collectAsStateWithLifecycle()
     val bearing by TrackingState.latestBearingDegrees.collectAsStateWithLifecycle()
     var recordDotVisible by remember { mutableStateOf(true) }
+    var lastHeading by remember { mutableStateOf<Float?>(null) }
+    var previousPostedSpeed by remember { mutableStateOf(postedSpeed) }
+    var signAlpha by remember { mutableStateOf(1f) }
 
     LaunchedEffect(Unit) {
         while (true) {
-            kotlinx.coroutines.delay(650)
+            delay(650)
             recordDotVisible = !recordDotVisible
         }
     }
-
-    val direction = bearing?.let { compassDirection(it) } ?: "--"
-    val arrow = bearing?.let { compassArrow(it) } ?: "·"
+    // GPS course is unreliable while stationary. Keep the last moving heading.
+    LaunchedEffect(bearing, speed) {
+        val heading = bearing?.takeIf { it.isFinite() }
+        if (heading != null && (lastHeading == null || (speed ?: 0f) > 2f)) {
+            lastHeading = ((heading % 360f) + 360f) % 360f
+        }
+    }
+    LaunchedEffect(postedSpeed) {
+        signAlpha = 1f
+        val changed = postedSpeed != previousPostedSpeed
+        previousPostedSpeed = postedSpeed
+        if (changed && postedSpeed != null) {
+            // One brief pulse for a new limit; never flash continuously.
+            signAlpha = 0.3f
+            delay(220)
+            signAlpha = 1f
+        }
+    }
 
     Surface(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                "●",
-                color = Color.Red.copy(alpha = if (recordDotVisible) 1f else 0.18f),
-                style = MaterialTheme.typography.titleLarge
-            )
-            Text(
-                postedSpeed?.toString() ?: "--",
-                style = MaterialTheme.typography.headlineMedium
-            )
-            Text(
-                speed?.roundToInt()?.toString() ?: "--",
-                style = MaterialTheme.typography.headlineMedium
-            )
-            Text(
-                "$arrow $direction",
-                style = MaterialTheme.typography.titleLarge
-            )
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val scale = minOf(maxWidth.value / 270f, maxHeight.value / 96f, 1.5f)
+            Row(
+                modifier = Modifier.fillMaxSize().padding((8 * scale).dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                Text("●", color = Color.Red.copy(alpha = if (recordDotVisible) 1f else 0.18f),
+                    fontSize = (14 * scale).sp,
+                    modifier = Modifier.semantics { contentDescription = "Recording" })
+                Column(
+                    modifier = Modifier.size((58 * scale).dp, (72 * scale).dp)
+                        .alpha(signAlpha)
+                        .background(Color.White, RoundedCornerShape((7 * scale).dp))
+                        .border((2 * scale).dp, Color.Black, RoundedCornerShape((7 * scale).dp)),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("MAXIMUM", color = Color.Black, fontSize = (8 * scale).sp, maxLines = 1)
+                    Text(postedSpeed?.toString() ?: "--", color = Color.Black,
+                        fontSize = (29 * scale).sp, maxLines = 1)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(speed?.roundToInt()?.toString() ?: "--", fontSize = (32 * scale).sp, maxLines = 1)
+                    Text("km/h", fontSize = (11 * scale).sp, maxLines = 1)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    LiveTravelCompass(lastHeading, Modifier.size((52 * scale).dp))
+                    Text(lastHeading?.let { compassDirection(it) } ?: "--", fontSize = (12 * scale).sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveTravelCompass(heading: Float?, modifier: Modifier = Modifier) {
+    Canvas(modifier.semantics {
+        contentDescription = heading?.let { "Travel direction ${compassDirection(it)}" } ?: "Waiting for travel direction"
+    }) {
+        val radius = size.minDimension / 2f
+        drawCircle(Color.White, radius)
+        drawCircle(Color.Black, radius - 1.dp.toPx(), style = Stroke(1.5.dp.toPx()))
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.BLACK
+            textSize = radius * 0.32f
+            textAlign = android.graphics.Paint.Align.CENTER
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        val baseline = -(paint.ascent() + paint.descent()) / 2f
+        val inset = radius * 0.71f
+        for ((label, x, y) in listOf(
+            Triple("N", center.x, center.y - inset),
+            Triple("E", center.x + inset, center.y),
+            Triple("S", center.x, center.y + inset),
+            Triple("W", center.x - inset, center.y)
+        )) drawContext.canvas.nativeCanvas.drawText(label, x, y + baseline, paint)
+        if (heading != null) {
+            rotate(heading) {
+                val needle = Path().apply {
+                    moveTo(center.x, center.y - radius * 0.53f)
+                    lineTo(center.x - radius * 0.16f, center.y + radius * 0.2f)
+                    lineTo(center.x + radius * 0.16f, center.y + radius * 0.2f)
+                    close()
+                }
+                drawPath(needle, Color(0xFFD32F2F))
+                drawLine(Color.DarkGray, center, Offset(center.x, center.y + radius * 0.42f), 2.dp.toPx())
+            }
+            drawCircle(Color.Black, radius * 0.07f)
+        } else {
+            drawCircle(Color.Gray, radius * 0.08f)
         }
     }
 }
@@ -172,12 +248,6 @@ private fun compassDirection(bearing: Float): String {
     val normalized = ((bearing % 360f) + 360f) % 360f
     val directions = arrayOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
     return directions[((normalized + 22.5f) / 45f).toInt() % directions.size]
-}
-
-private fun compassArrow(bearing: Float): String {
-    val normalized = ((bearing % 360f) + 360f) % 360f
-    val arrows = arrayOf("↑", "↗", "→", "↘", "↓", "↙", "←", "↖")
-    return arrows[((normalized + 22.5f) / 45f).toInt() % arrows.size]
 }
 
 @Composable
@@ -334,7 +404,7 @@ private fun RouteCollectorScreen() {
     if (showUpdateDialog && updateReady) {
         AlertDialog(
             onDismissRequest = { showUpdateDialog = false },
-            title = { Text("Route Collector update available") },
+            title = { Text("Drive Buddy update available") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     latestBuildLabel?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
@@ -837,7 +907,7 @@ private fun RouteCollectorScreen() {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Route Collector", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        Text("Drive Buddy", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                         Button(onClick = {
                             if (activeDriveId == null) scope.launch {
                                 autoStartArmed = true
@@ -1151,7 +1221,7 @@ private fun RouteCollectorScreen() {
                                 }) { Text("+") }
                             }
                         }
-                        Text("0.30 g is the starting calibration. Compare Route Collector events with Ajusto and tune this over time.", style = MaterialTheme.typography.bodySmall)
+                        Text("0.30 g is the starting calibration. Compare Drive Buddy events with Ajusto and tune this over time.", style = MaterialTheme.typography.bodySmall)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Speed tolerance: $toleranceSpeed +$toleranceValue")
                             Row {

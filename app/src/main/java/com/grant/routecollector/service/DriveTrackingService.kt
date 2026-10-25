@@ -427,9 +427,12 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
     }
 
     private fun handlePedestrianCrossing(fact: MarkerEntity, distance: Float, approaching: Boolean) {
+        // A pedestrian crossing is one physical, bidirectional hazard. Do not compare
+        // bearings here: the same saved marker must warn from either direction.
         val speed = TrackingState.latestSpeedKph.value ?: 50f
         val warning = (speed * 4f).coerceIn(PEDESTRIAN_MIN_WARNING_METRES, PEDESTRIAN_MAX_WARNING_METRES)
-        if (approaching && distance <= warning) {
+        val closeEnoughAfterGpsJump = distance <= ACTIVE_ZONE_RADIUS_METRES
+        if ((approaching || closeEnoughAfterGpsJump) && distance <= warning) {
             TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value + "pedestrian"
             if (fact.id !in announcedMarkerIds) {
                 announcedMarkerIds += fact.id

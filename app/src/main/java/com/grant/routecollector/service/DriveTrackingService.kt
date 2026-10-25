@@ -441,10 +441,19 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
     }
 
     private suspend fun handlePassingZone(fact: MarkerEntity, distance: Float, approaching: Boolean) {
-        if (fact.id in announcedMarkerIds || !approaching || distance > ACTIVE_ZONE_RADIUS_METRES) return
+        // Passing-zone markers are direction-specific, but GPS course can wander on
+        // bends and around the exact marker. Use a slightly wider capture radius and
+        // heading tolerance than speed signs, while still rejecting opposing traffic.
+        val passingRadiusMetres = 110f
+        val passingDirectionToleranceDegrees = 70f
+        if (fact.id in announcedMarkerIds || distance > passingRadiusMetres) return
         val saved = markerBearing(fact) ?: return
         val travel = currentTravelBearing ?: return
-        if (bearingDifference(saved, travel) > SAME_DIRECTION_TOLERANCE_DEGREES) return
+        val difference = bearingDifference(saved, travel)
+        if (difference > passingDirectionToleranceDegrees) return
+        // Do not require a monotonically decreasing distance once we are very close:
+        // sparse/noisy GPS samples can jump across a saved marker between updates.
+        if (!approaching && distance > ACTIVE_ZONE_RADIUS_METRES) return
         announcedMarkerIds += fact.id
         if (fact.kind == "passing_zone_start") {
             TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value + "passing"

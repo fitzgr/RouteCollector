@@ -303,6 +303,8 @@ private fun RouteCollectorScreen() {
     val markersFlow = remember(effectiveDriveId) { effectiveDriveId?.let { dao.observeMarkers(it) } ?: flowOf(emptyList()) }
     val points by pointsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val markers by markersFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val allMarkersFlow = remember(dao) { dao.observeAllMarkers() }
+    val allMarkers by allMarkersFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
     val postedSpeed by TrackingState.currentPostedSpeed.collectAsStateWithLifecycle()
     val actualSpeed by TrackingState.latestSpeedKph.collectAsStateWithLifecycle()
@@ -1381,7 +1383,9 @@ private fun RouteCollectorScreen() {
                 ) {
                     RouteMap(
                         points = points,
-                        markers = markers,
+                        // A live drive shows all known road facts, not just markers
+                        // created on this particular trip.
+                        markers = if (activeDriveId != null) allMarkers.filter { it.kind != "hard_brake" } else markers,
                         currentLat = latestLat,
                         currentLon = latestLon,
                         travelBearing = travelBearing,

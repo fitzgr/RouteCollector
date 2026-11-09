@@ -39,13 +39,14 @@ data class TrackPointEntity(
         entity = DriveEntity::class,
         parentColumns = ["id"],
         childColumns = ["driveId"],
-        onDelete = ForeignKey.CASCADE
+        // User-collected road facts survive when their trip history is pruned.
+        onDelete = ForeignKey.SET_NULL
     )],
     indices = [Index("driveId")]
 )
 data class MarkerEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val driveId: Long,
+    val driveId: Long?,
     val timestamp: Long,
     val latitude: Double,
     val longitude: Double,

@@ -1,0 +1,139 @@
+name: Build Android Debug APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - feature/google-maps-overlay
+permissions:
+  contents: write
+
+jobs:
+  build-debug-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Restore desktop debug keystore
+        env:
+          ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          mkdir -p "$HOME/.android"
+          printf '%s' "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Build debug APK
+        run: |
+          echo "BUILD_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+          ./gradlew assembleDebug
+
+      - name: Verify APK signing certificate
+        run: |
+          EXPECTED_SHA256="4671C8D0EFCF6B53D84D6F72C8F9D99B22623EDE4FE2D35F9566846C9E988B31"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          test -n "$APKSIGNER"
+
+          # Keep the complete apksigner output visible in the Actions log. Newer
+          # build-tools can vary the signer label formatting, so extract the
+          # digest by its field name rather than a single exact output string.
+          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk | tee /tmp/apksigner-output.txt
+          ACTUAL_SHA256="$(sed -nE 's/^.*certificate SHA-256 digest:[[:space:]]*//Ip' /tmp/apksigner-output.txt | head -1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          if [ -z "$ACTUAL_SHA256" ]; then
+            echo "::error::apksigner verified the APK but no SHA-256 certificate digest could be parsed."
+            exit 1
+          fi
+          echo "Built APK signer SHA-256: $ACTUAL_SHA256"
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "::error::APK signer does not match the desktop debug certificate required for in-place updates."
+            exit 1
+          fi
+
+      - name: Publish stable latest-debug release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk routecollector-debug.apk
+          BUILD_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          BUILD_FINISHED_AT="$(date +%s)"
+          BUILD_SECONDS="$((BUILD_FINISHED_AT - BUILD_STARTED_AT))"
+          BUILD_DURATION="$((BUILD_SECONDS / 60))m $((BUILD_SECONDS % 60))s"
+          VERSION_CODE="$(jq -r '.elements[0].versionCode' app/build/outputs/apk/debug/output-metadata.json)"
+          VERSION_NAME="$(jq -r '.elements[0].versionName' app/build/outputs/apk/debug/output-metadata.json)"
+          test "$VERSION_CODE" != "null"
+          test "$VERSION_NAME" != "null"
+          echo "Publishing APK version $VERSION_NAME (build $VERSION_CODE)"
+          if git rev-parse latest-debug >/dev/null 2>&1; then
+            CHANGES_JSON="$(git log latest-debug..HEAD --pretty=format:'%s' | head -8 | jq -R -s 'split("\n") | map(select(length > 0))')"
+          else
+            CHANGES_JSON="$(git log -8 --pretty=format:'%s' | jq -R -s 'split("\n") | map(select(length > 0))')"
+          fi
+          jq -n \
+            --argjson versionCode "$VERSION_CODE" \
+            --arg versionName "$VERSION_NAME" \
+            --arg buildTime "$BUILD_TIME" \
+            --arg buildDuration "$BUILD_DURATION" \
+            --arg apkUrl "https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/routecollector-debug.apk" \
+            --argjson changes "$CHANGES_JSON" \
+            '{versionCode:$versionCode,versionName:$versionName,buildTime:$buildTime,buildDuration:$buildDuration,apkUrl:$apkUrl,changes:$changes}' > update.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f latest-debug "$GITHUB_SHA"
+          git push origin refs/tags/latest-debug --force
+
+          if gh release view latest-debug >/dev/null 2>&1; then
+            gh release upload latest-debug routecollector-debug.apk update.json --clobber
+            gh release edit latest-debug \
+              --title "Route Collector Latest Debug" \
+              --notes "Latest cloud-built Route Collector debug APK. Branch: $GITHUB_REF_NAME. Commit: $GITHUB_SHA. Version: $VERSION_NAME (build $VERSION_CODE). For testing only."
+          else
+            gh release create latest-debug routecollector-debug.apk update.json \
+              --title "Route Collector Latest Debug" \
+              --notes "Latest cloud-built Route Collector debug APK. Branch: $GITHUB_REF_NAME. Commit: $GITHUB_SHA. Version: $VERSION_NAME (build $VERSION_CODE). For testing only." \
+              --prerelease
+          fi
+
+      - name: Verify published updater assets
+        run: |
+          MANIFEST_URL="https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json"
+          APK_URL="https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/routecollector-debug.apk"
+          for attempt in 1 2 3 4 5 6; do
+            if curl --fail --location --silent --show-error --header "Cache-Control: no-cache" "$MANIFEST_URL?run=$GITHUB_RUN_ID" -o published-update.json \
+              && grep -q '"versionCode"' published-update.json \
+              && curl --fail --location --silent --show-error --range 0-3 "$APK_URL?run=$GITHUB_RUN_ID" -o published-apk-prefix \
+              && test "$(od -An -tx1 -N2 published-apk-prefix | tr -d ' \n')" = "504b"; then
+              echo "Published updater manifest and APK are live."
+              cat published-update.json
+              exit 0
+            fi
+            echo "Updater assets not live yet; retrying in 5 seconds..."
+            sleep 5
+          done
+          echo "Published updater assets could not be verified."
+          exit 1
+
+      - name: Upload Route Collector debug APK artifact
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: routecollector-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 3

@@ -3,6 +3,7 @@ package com.grant.routecollector.data
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
@@ -21,8 +22,19 @@ interface RouteDao {
     @Query("SELECT * FROM drives ORDER BY startedAt")
     suspend fun getAllDrives(): List<DriveEntity>
 
+    // Automatic hard-braking events belong to a trip, unlike manually collected
+    // road facts. Remove those events when their trip falls out of the rolling 10.
+    @Query("DELETE FROM markers WHERE kind = 'hard_brake' AND (driveId IS NULL OR driveId NOT IN (SELECT id FROM drives ORDER BY startedAt DESC LIMIT :keepCount))")
+    suspend fun pruneOldHardBrakes(keepCount: Int): Int
+
     @Query("DELETE FROM drives WHERE id NOT IN (SELECT id FROM drives ORDER BY startedAt DESC LIMIT :keepCount)")
-    suspend fun pruneOldDrives(keepCount: Int = 10): Int
+    suspend fun pruneOldDriveRows(keepCount: Int): Int
+
+    @Transaction
+    suspend fun pruneOldDrives(keepCount: Int = 10): Int {
+        pruneOldHardBrakes(keepCount)
+        return pruneOldDriveRows(keepCount)
+    }
 
     @Query("SELECT * FROM track_points ORDER BY timestamp")
     suspend fun getAllPoints(): List<TrackPointEntity>
@@ -72,8 +84,8 @@ interface RouteDao {
     suspend fun deleteLatestMarker(driveId: Long): Int
     @Query("SELECT * FROM markers WHERE driveId = :driveId ORDER BY timestamp DESC LIMIT 1")
     suspend fun latestMarker(driveId: Long): MarkerEntity?
-    @Query("SELECT * FROM markers WHERE driveId = :driveId AND note LIKE '%' || :pairToken || '%' ORDER BY timestamp")
-    suspend fun markersWithPairToken(driveId: Long, pairToken: String): List<MarkerEntity>
+    @Query("SELECT * FROM markers WHERE (:driveId IS NULL OR driveId = :driveId) AND note LIKE '%' || :pairToken || '%' ORDER BY timestamp")
+    suspend fun markersWithPairToken(driveId: Long?, pairToken: String): List<MarkerEntity>
 
     @Query("SELECT * FROM markers WHERE kind = :kind AND latitude BETWEEN :minLat AND :maxLat AND longitude BETWEEN :minLon AND :maxLon")
     suspend fun markersOfKindInBox(kind: String, minLat: Double, maxLat: Double, minLon: Double, maxLon: Double): List<MarkerEntity>

@@ -1,5 +1,9 @@
 # Route Collector Backlog
 
+## Private daily marker backups — setup needed
+
+- [ ] **[Issue #3](https://github.com/fitzgr/RouteCollector/issues/3): Create a separate private GitHub repository** for Drive Buddy's nightly, marker-only JSON snapshots. Keep GPS data out of the public RouteCollector code repository. Set up narrowly scoped authorization kept securely on the phone; then implement scheduled local + private GitHub backups with offline retry, retention, and verified restore. The repository and sync are **not yet configured**. Depends on testing the permanent-markers migration in draft PR #2.
+
 ## Cloud and community data — deferred
 
 Keep this work out of the current road-test build until the local collector, voice workflow, route facts, and camera snapping are stable.

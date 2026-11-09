@@ -54,7 +54,7 @@ object RouteDataExporter {
             markers.put(
                 JSONObject()
                     .put("id", m.id)
-                    .put("driveId", m.driveId)
+                    .put("driveId", m.driveId ?: JSONObject.NULL)
                     .put("timestamp", m.timestamp)
                     .put("latitude", m.latitude)
                     .put("longitude", m.longitude)
@@ -127,7 +127,9 @@ object RouteDataExporter {
         var markerCount = 0
         for (i in 0 until markersJson.length()) {
             val m = markersJson.getJSONObject(i)
-            val newDriveId = idMap[m.getLong("driveId")] ?: continue
+            // Keep imported road facts even when their original trip has expired.
+            val oldDriveId = if (m.isNull("driveId")) null else m.getLong("driveId")
+            val newDriveId = oldDriveId?.let { idMap[it] }
             dao.insertMarker(
                 MarkerEntity(
                     driveId = newDriveId,

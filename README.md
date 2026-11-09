@@ -382,6 +382,10 @@ Settings also provides **Restore JSON**. Restore validates the Route Collector b
 
 The existing app database is intentionally preserved when installing development updates over the existing package with ADB `install -r`.
 
+**Permanent road facts:** Trip history is a rolling window of the latest 10 trips, but road markers are not trip history. A version-2 Room database migration retains the existing collected markers and changes their trip association to optional. When an old trip is pruned its GPS points and automatic hard-braking events are removed, while collected speed limits, cameras, pedestrian crossings, deer zones, passing zones, community/senior zones and other manually collected road facts survive and remain eligible for alerts. Live maps include markers collected on previous trips. JSON backup/restore retains markers without a surviving trip association.
+
+**Before upgrading:** Make a **Backup JSON** in Settings and keep a copy outside the app/device. Old markers that were already cascade-deleted cannot be recreated by the migration itself; restore them from an older backup if available. Do not uninstall or clear the app's storage.
+
 Cloud/community synchronization and multi-user merge/confidence models are not part of the current local MVP; related future work belongs in `BACKLOG.md`.
 
 ---

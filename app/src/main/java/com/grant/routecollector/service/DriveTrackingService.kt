@@ -539,6 +539,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
         announcedMarkerIds += fact.id; speak(phrase)
     }
     private suspend fun handleRedLightCamera(fact: MarkerEntity, distance: Float, approaching: Boolean, warningMetres: Float) {
+        // A newly captured marker is confirmation only, never an immediate proximity alert.
+        if (fact.driveId == driveId && System.currentTimeMillis() - fact.timestamp < 120_000L) return
         // An intersection-wide warning: the capture bearing must never restrict approach direction.
         // Require movement toward the intersection (or remaining within its crossing radius).
         val inCrossing = distance <= ACTIVE_ZONE_RADIUS_METRES

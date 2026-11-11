@@ -1,5 +1,7 @@
 package com.grant.routecollector.service
 
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.app.Service
 import android.content.ContentValues
 import android.content.Context
@@ -96,6 +98,22 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         scope.launch { TrackingState.driverAlert.collect { alert -> if (alert != null) mainHandler.post { handleDriverAlert(alert) } } }
         scope.launch { combine(TrackingState.currentPostedSpeed, TrackingState.latestSpeedKph) { posted, actual -> posted to actual }.collect { (posted, actual) -> mainHandler.post { updateSpeedStatus(posted, actual); refreshActiveZones() } } }
         scope.launch { TrackingState.activeZoneKinds.collect { mainHandler.post { refreshActiveZones() } } }
+        scope.launch { TrackingState.activeRoadAlerts.collect { alerts -> mainHandler.post { refreshCameraFlash("camera" in alerts) } } }
+    }
+
+    private var cameraFlashAnimator: ObjectAnimator? = null
+    private var cameraButton: Button? = null
+
+    private fun refreshCameraFlash(active: Boolean) {
+        val button = cameraButton ?: return
+        if (!active) { cameraFlashAnimator?.cancel(); cameraFlashAnimator = null; button.alpha = 1f; return }
+        if (cameraFlashAnimator != null) return
+        cameraFlashAnimator = ObjectAnimator.ofFloat(button, View.ALPHA, 1f, 0.25f).apply {
+            duration = 450L
+            repeatMode = ValueAnimator.REVERSE
+            repeatCount = ValueAnimator.INFINITE
+            start()
+        }
     }
 
     override fun onInit(status: Int) {
@@ -129,6 +147,8 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         }
         val quickRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val redLightCamera = Button(this).apply { text = "🚦 📷"; contentDescription = "Red light camera"; setOnClickListener { markRedLightCamera() } }
+        cameraButton = redLightCamera
+        refreshCameraFlash("camera" in TrackingState.activeRoadAlerts.value)
         val speedMarker = Button(this).apply { text = "Speed" }
         val deer = LinearLayout(this).apply {
             gravity = Gravity.CENTER

@@ -358,10 +358,14 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
 
     private suspend fun announceNearbyRoadFacts(location: Location) {
         val facts = dao.getSpokenRoadFacts(); val cameraWarningMetres = getSharedPreferences(PREFS, MODE_PRIVATE).getInt(PREF_CAMERA_WARNING_METRES, 200).toFloat(); val deerFacts = facts.filter { it.kind == "deer_zone_enter" }
+        val observedCameraIds = mutableSetOf<Long>()
         for (fact in facts) {
+            if (fact.kind == "red_light_camera" || fact.kind == "camera") observedCameraIds += fact.id
             val result = FloatArray(1); Location.distanceBetween(location.latitude, location.longitude, fact.latitude, fact.longitude, result); val distance = result[0]; val previousDistance = previousMarkerDistances[fact.id]; val approaching = previousDistance == null || distance < previousDistance; previousMarkerDistances[fact.id] = distance
             when (fact.kind) { "speed", "speed_advance" -> handleDirectionalSpeedFact(fact, distance, approaching); "red_light_camera", "camera" -> handleRedLightCamera(fact, distance, approaching, cameraWarningMetres); "deer_zone_enter" -> handleDeerZoneFact(fact, deerFacts, distance, approaching); "pedestrian_crossing" -> handlePedestrianCrossing(fact, distance, approaching); "passing_zone_start", "passing_zone_end" -> handlePassingZone(fact, distance, approaching); else -> handleZoneFact(fact, distance, approaching) }
         }
+        camerasCurrentlyInRange.retainAll(observedCameraIds)
+        TrackingState.activeRoadAlerts.value = if (camerasCurrentlyInRange.isNotEmpty()) TrackingState.activeRoadAlerts.value + "camera" else TrackingState.activeRoadAlerts.value - "camera"
     }
 
     private suspend fun handleDirectionalSpeedFact(fact: MarkerEntity, distance: Float, approaching: Boolean) {
@@ -535,17 +539,22 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
         announcedMarkerIds += fact.id; speak(phrase)
     }
     private suspend fun handleRedLightCamera(fact: MarkerEntity, distance: Float, approaching: Boolean, warningMetres: Float) {
-        val savedBearing = markerBearing(fact)
-        val travel = currentTravelBearing
-        if (savedBearing != null && travel != null && bearingDifference(savedBearing, travel) > SAME_DIRECTION_TOLERANCE_DEGREES) {
-            camerasCurrentlyInRange -= fact.id
-            TrackingState.activeRoadAlerts.value = if (camerasCurrentlyInRange.isNotEmpty()) TrackingState.activeRoadAlerts.value + "camera" else TrackingState.activeRoadAlerts.value - "camera"
-            return
-        }
-        if (distance <= warningMetres) camerasCurrentlyInRange += fact.id else camerasCurrentlyInRange -= fact.id
+        // A newly captured marker is confirmation only, never an immediate proximity alert.
+        if (fact.driveId == driveId && System.currentTimeMillis() - fact.timestamp < 120_000L) return
+        // An intersection-wide warning: the capture bearing must never restrict approach direction.
+        // Require movement toward the intersection (or remaining within its crossing radius).
+        val inCrossing = distance <= ACTIVE_ZONE_RADIUS_METRES
+        val active = distance <= warningMetres && (approaching || (inCrossing && fact.id in camerasCurrentlyInRange))
+        if (active) camerasCurrentlyInRange += fact.id else camerasCurrentlyInRange -= fact.id
         TrackingState.activeRoadAlerts.value = if (camerasCurrentlyInRange.isNotEmpty()) TrackingState.activeRoadAlerts.value + "camera" else TrackingState.activeRoadAlerts.value - "camera"
-        if (approaching && distance <= warningMetres && distance > ACTIVE_ZONE_RADIUS_METRES && fact.id !in warnedCameraMarkerIds) { warnedCameraMarkerIds += fact.id; speak("Red-light-camera") }
-        if (approaching && distance <= ACTIVE_ZONE_RADIUS_METRES && fact.id !in verifiedCameraMarkerIds) { verifiedCameraMarkerIds += fact.id; TrackingState.postDriverAlert(text = "Red light camera", kind = "red_light_camera_remove_available", markerId = fact.id) }
+        if (active && fact.id !in warnedCameraMarkerIds) {
+            warnedCameraMarkerIds += fact.id
+            speak("Red light camera ahead")
+        }
+        if (active && inCrossing && fact.id !in verifiedCameraMarkerIds) {
+            verifiedCameraMarkerIds += fact.id
+            TrackingState.postDriverAlert(text = "Red light camera", kind = "red_light_camera_remove_available", markerId = fact.id)
+        }
     }
     private fun parseSpeed(note: String): Int? = Regex("\\b(20|30|40|50|60|70|80|90|100|110|120)\\b").find(note)?.groupValues?.getOrNull(1)?.toIntOrNull()
     private fun speak(text: String) {

@@ -1,5 +1,7 @@
 package com.grant.routecollector.service
 
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.app.Service
 import android.content.ContentValues
 import android.content.Context
@@ -96,6 +98,22 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         scope.launch { TrackingState.driverAlert.collect { alert -> if (alert != null) mainHandler.post { handleDriverAlert(alert) } } }
         scope.launch { combine(TrackingState.currentPostedSpeed, TrackingState.latestSpeedKph) { posted, actual -> posted to actual }.collect { (posted, actual) -> mainHandler.post { updateSpeedStatus(posted, actual); refreshActiveZones() } } }
         scope.launch { TrackingState.activeZoneKinds.collect { mainHandler.post { refreshActiveZones() } } }
+        scope.launch { TrackingState.activeRoadAlerts.collect { alerts -> mainHandler.post { refreshCameraFlash("camera" in alerts) } } }
+    }
+
+    private var cameraFlashAnimator: ObjectAnimator? = null
+    private var cameraButton: Button? = null
+
+    private fun refreshCameraFlash(active: Boolean) {
+        val button = cameraButton ?: return
+        if (!active) { cameraFlashAnimator?.cancel(); cameraFlashAnimator = null; button.alpha = 1f; return }
+        if (cameraFlashAnimator != null) return
+        cameraFlashAnimator = ObjectAnimator.ofFloat(button, View.ALPHA, 1f, 0.25f).apply {
+            duration = 450L
+            repeatMode = ValueAnimator.REVERSE
+            repeatCount = ValueAnimator.INFINITE
+            start()
+        }
     }
 
     override fun onInit(status: Int) {
@@ -129,6 +147,8 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         }
         val quickRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val redLightCamera = Button(this).apply { text = "🚦 📷"; contentDescription = "Red light camera"; setOnClickListener { markRedLightCamera() } }
+        cameraButton = redLightCamera
+        refreshCameraFlash("camera" in TrackingState.activeRoadAlerts.value)
         val speedMarker = Button(this).apply { text = "Speed" }
         val deer = LinearLayout(this).apply {
             gravity = Gravity.CENTER
@@ -302,6 +322,6 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
 
     private fun exportRouteData() { scope.launch { try { val root = JSONObject().put("format", "routecollector-export-v1").put("exportedAt", System.currentTimeMillis()); val drives = JSONArray(); dao.getAllDrives().forEach { d -> drives.put(JSONObject().put("id", d.id).put("startedAt", d.startedAt).put("endedAt", d.endedAt).put("title", d.title)) }; val points = JSONArray(); dao.getAllPoints().forEach { p -> points.put(JSONObject().put("id", p.id).put("driveId", p.driveId).put("timestamp", p.timestamp).put("latitude", p.latitude).put("longitude", p.longitude).put("accuracyMetres", p.accuracyMetres).put("speedMps", p.speedMps)) }; val markers = JSONArray(); dao.getAllMarkers().forEach { m -> markers.put(JSONObject().put("id", m.id).put("driveId", m.driveId).put("timestamp", m.timestamp).put("latitude", m.latitude).put("longitude", m.longitude).put("kind", m.kind).put("note", m.note)) }; root.put("drives", drives).put("points", points).put("markers", markers); val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.CANADA).format(Date()); val values = ContentValues().apply { put(MediaStore.Downloads.DISPLAY_NAME, "routecollector-$stamp.json"); put(MediaStore.Downloads.MIME_TYPE, "application/json"); put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS) }; val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: error("Could not create export"); contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(root.toString(2)) } ?: error("Could not open export"); launch(Dispatchers.Main) { acknowledge("Route data exported to Downloads") } } catch (_: Exception) { launch(Dispatchers.Main) { acknowledge("Route data export failed") } } } }
 
-    override fun onDestroy() { mainHandler.removeCallbacksAndMessages(null); overlayView?.let { windowManager.removeView(it) }; overlayView = null; visualAlertView = null; speedStatusView = null; speedStatusRow = null; speedClearButton = null; activeZonesPanel = null; speedSpinner = null; speedTypeSpinner = null; tts?.stop(); tts?.shutdown(); audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }; scope.cancel(); super.onDestroy() }
+    override fun onDestroy() { cameraFlashAnimator?.cancel(); cameraFlashAnimator = null; cameraButton = null; mainHandler.removeCallbacksAndMessages(null); overlayView?.let { windowManager.removeView(it) }; overlayView = null; visualAlertView = null; speedStatusView = null; speedStatusRow = null; speedClearButton = null; activeZonesPanel = null; speedSpinner = null; speedTypeSpinner = null; tts?.stop(); tts?.shutdown(); audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }; scope.cancel(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 }

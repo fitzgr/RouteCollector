@@ -256,7 +256,27 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; val speeds = listOf(40, 50, 60, 70, 80, 90, 100, 110)
         val localSpeedSpinner = Spinner(this).apply { adapter = ArrayAdapter(this@CollectorOverlayService, android.R.layout.simple_spinner_dropdown_item, speeds.map { "$it km/h" }); setSelection(speeds.indexOf(60)); prompt = "Speed" }; speedSpinner = localSpeedSpinner
         val typeSpinner = Spinner(this).apply { adapter = ArrayAdapter(this@CollectorOverlayService, android.R.layout.simple_spinner_dropdown_item, listOf("Zone begins", "Advance sign")); setSelection(0); prompt = "Marker type" }; speedTypeSpinner = typeSpinner
-        val submit = Button(this).apply { text = "Set"; setOnClickListener { val speed = speeds[localSpeedSpinner.selectedItemPosition]; val advance = typeSpinner.selectedItemPosition == 1; val kind = if (advance) "speed_advance" else "speed"; val note = if (advance) "Speed limit $speed advance sign" else "Speed limit $speed"; saveRoadFact(kind, note) { if (!advance) { TrackingState.currentPostedSpeed.value = speed; TrackingState.currentSpeedIsCollected.value = true }; acknowledge(if (advance) "$speed kilometre advance sign marked" else "$speed kilometre zone start marked") } } }
+        val submit = Button(this).apply {
+            text = "Set"
+            setOnClickListener {
+                val speed = speeds[localSpeedSpinner.selectedItemPosition]
+                val advance = typeSpinner.selectedItemPosition == 1
+                val kind = if (advance) "speed_advance" else "speed"
+                val note = if (advance) "Speed limit $speed advance sign" else "Speed limit $speed"
+                saveRoadFact(kind, note) {
+                    if (!advance) {
+                        TrackingState.currentPostedSpeed.value = speed
+                        TrackingState.currentSpeedIsCollected.value = true
+                    }
+                    acknowledge(
+                        if (advance) "$speed kilometre advance sign marked"
+                        else "$speed kilometre zone start marked"
+                    )
+                    // After an advance marker is saved, expect the next marker to begin the zone.
+                    if (advance) typeSpinner.setSelection(0)
+                }
+            }
+        }
         row.addView(localSpeedSpinner, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)); row.addView(typeSpinner, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)); row.addView(submit); panel.addView(row); return panel
     }
 

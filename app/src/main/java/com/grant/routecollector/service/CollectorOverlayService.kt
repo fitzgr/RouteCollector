@@ -59,6 +59,9 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         private const val PREF_VISUAL_ALERTS = "visual_alerts_enabled"
         private const val PREF_CAMERA_WARNING_METRES = "red_light_camera_warning_metres"
         private const val PREF_SPEED_TOLERANCE_PREFIX = "speed_tolerance_"
+        private const val SPEED_INFERENCE_OFFSET_KPH = 8f
+        private const val MIN_INFERENCE_SPEED_KPH = 25f
+        private val SPEED_OPTIONS = (30..110 step 10).toList()
         private const val OVERLAP_RADIUS_METRES = 120f
         private const val DEER_PAIR_MAX_METRES = 20_000f
         private const val DEER_REVERSE_MIN_DEGREES = 120f
@@ -86,6 +89,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     private var verificationActions: LinearLayout? = null
     private var activeZonesPanel: LinearLayout? = null
     private var speedSpinner: Spinner? = null
+    private var speedMarkerButton: Button? = null
     private var activeVerificationMarkerId: Long? = null
     private val clearVisualAlert = Runnable { visualAlertView?.visibility = View.GONE }
 
@@ -149,7 +153,8 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         val redLightCamera = Button(this).apply { text = "🚦 📷"; contentDescription = "Red light camera"; setOnClickListener { markRedLightCamera() } }
         cameraButton = redLightCamera
         refreshCameraFlash("camera" in TrackingState.activeRoadAlerts.value)
-        val speedMarker = Button(this).apply { text = "Speed" }
+        val speedMarker = Button(this).apply { text = "Speed"; contentDescription = "Speed marker" }
+        speedMarkerButton = speedMarker
         val deer = LinearLayout(this).apply {
             gravity = Gravity.CENTER
             minimumWidth = 62
@@ -253,7 +258,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     private fun buildSpeedMarkerPanel(): LinearLayout {
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE; setPadding(8, 6, 8, 6); setBackgroundColor(0xFF151618.toInt()) }
         panel.addView(TextView(this).apply { text = "Speed marker — choose values, then tap Set at the GPS point"; setTextColor(0xFFFFFFFF.toInt()); textSize = 12f })
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; val speeds = listOf(40, 50, 60, 70, 80, 90, 100, 110)
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; val speeds = SPEED_OPTIONS
         val localSpeedSpinner = Spinner(this).apply { adapter = ArrayAdapter(this@CollectorOverlayService, android.R.layout.simple_spinner_dropdown_item, speeds.map { "$it km/h" }); setSelection(speeds.indexOf(60)); prompt = "Speed" }; speedSpinner = localSpeedSpinner
         val typeSpinner = Spinner(this).apply { adapter = ArrayAdapter(this@CollectorOverlayService, android.R.layout.simple_spinner_dropdown_item, listOf("Zone begins", "Advance sign")); setSelection(0); prompt = "Marker type" }; speedTypeSpinner = typeSpinner
         val submit = Button(this).apply {
@@ -280,7 +285,30 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         row.addView(localSpeedSpinner, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)); row.addView(typeSpinner, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)); row.addView(submit); panel.addView(row); return panel
     }
 
-    private fun selectCurrentPostedSpeed() { val speeds = listOf(40, 50, 60, 70, 80, 90, 100, 110); val posted = TrackingState.currentPostedSpeed.value; speedSpinner?.setSelection(speeds.indexOf(posted).takeIf { it >= 0 } ?: speeds.indexOf(60)); speedTypeSpinner?.setSelection(0) }
+    // A driver travelling about 8 km/h above the limit should see that limit suggested:
+    // for example, an observed 58 km/h suggests a 50 km/h sign.
+    private fun inferSpeedLimit(actualKph: Float?): Int? {
+        if (actualKph == null || !actualKph.isFinite() || actualKph < MIN_INFERENCE_SPEED_KPH) return null
+        return (((actualKph - SPEED_INFERENCE_OFFSET_KPH) / 10f).roundToInt() * 10).coerceIn(30, 110)
+    }
+
+    private fun refreshSpeedMarkerSuggestion(actualKph: Float?) {
+        val suggested = inferSpeedLimit(actualKph)
+        speedMarkerButton?.apply {
+            text = if (suggested == null) "Speed" else "Speed\n≈$suggested km/h"
+            contentDescription = if (suggested == null) "Speed marker"
+                else "Speed marker, suggested speed limit $suggested kilometres per hour"
+        }
+    }
+
+    private fun selectCurrentPostedSpeed() {
+        // Only pick a new default when opening the marker controls; don't overwrite
+        // an explicit dropdown selection while the driver is setting a marker.
+        val suggested = inferSpeedLimit(TrackingState.latestSpeedKph.value)
+        val fallback = TrackingState.currentPostedSpeed.value?.takeIf { it in SPEED_OPTIONS } ?: 60
+        speedSpinner?.setSelection(SPEED_OPTIONS.indexOf(suggested ?: fallback))
+        speedTypeSpinner?.setSelection(0)
+    }
 
     private fun buildSettingsPanel(): LinearLayout {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE); val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE; setPadding(8, 8, 8, 8); setBackgroundColor(0xFF151618.toInt()) }
@@ -289,7 +317,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
         fun refreshCameraDistance() { cameraLabel.text = "Camera warning: ${prefs.getInt(PREF_CAMERA_WARNING_METRES, 200)} m" }
         refreshCameraDistance()
         val cameraRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }; cameraRow.addView(Button(this).apply { text = "−50"; setOnClickListener { val value = (prefs.getInt(PREF_CAMERA_WARNING_METRES, 200) - 50).coerceAtLeast(100); prefs.edit().putInt(PREF_CAMERA_WARNING_METRES, value).apply(); refreshCameraDistance() } }); cameraRow.addView(Button(this).apply { text = "+50"; setOnClickListener { val value = (prefs.getInt(PREF_CAMERA_WARNING_METRES, 200) + 50).coerceAtMost(500); prefs.edit().putInt(PREF_CAMERA_WARNING_METRES, value).apply(); refreshCameraDistance() } })
-        val toleranceTitle = TextView(this).apply { text = "Over-speed warning"; setTextColor(0xFFFFFFFF.toInt()); textSize = 12f }; val toleranceSpeeds = listOf(40, 50, 60, 70, 80, 90, 100, 110)
+        val toleranceTitle = TextView(this).apply { text = "Over-speed warning"; setTextColor(0xFFFFFFFF.toInt()); textSize = 12f }; val toleranceSpeeds = SPEED_OPTIONS
         val toleranceSpeed = Spinner(this).apply { adapter = ArrayAdapter(this@CollectorOverlayService, android.R.layout.simple_spinner_dropdown_item, toleranceSpeeds.map { "$it km/h" }); setSelection(toleranceSpeeds.indexOf(80)) }
         val toleranceLabel = TextView(this).apply { setTextColor(0xFFFFFFFF.toInt()); textSize = 12f }
         fun selectedToleranceSpeed() = toleranceSpeeds[toleranceSpeed.selectedItemPosition]
@@ -302,7 +330,7 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
     private fun defaultTolerance(speed: Int) = if (speed >= 100) 9 else 8
     private fun getSpeedTolerance(speed: Int) = getSharedPreferences(PREFS, MODE_PRIVATE).getInt("$PREF_SPEED_TOLERANCE_PREFIX$speed", defaultTolerance(speed))
     private fun setSpeedTolerance(speed: Int, tolerance: Int) { getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt("$PREF_SPEED_TOLERANCE_PREFIX$speed", tolerance).apply() }
-    private fun updateSpeedStatus(posted: Int?, actual: Float?) { val view = speedStatusView ?: return; val actualRounded = actual?.roundToInt(); val tolerance = posted?.let { getSpeedTolerance(it) }; val warning = posted != null && actualRounded != null && tolerance != null && actualRounded > posted + tolerance; view.text = buildString { if (warning) append("⚠  "); append("${if (TrackingState.currentSpeedIsCollected.value) "Collected" else "Posted"} ${posted ?: "--"}   Actual ${actualRounded ?: "--"}"); if (posted != null && tolerance != null) append("   +$tolerance") }; view.setTextColor(if (warning) 0xFFFFB74D.toInt() else 0xFFFFFFFF.toInt()); speedClearButton?.visibility = if (posted != null) View.VISIBLE else View.GONE }
+    private fun updateSpeedStatus(posted: Int?, actual: Float?) { refreshSpeedMarkerSuggestion(actual); val view = speedStatusView ?: return; val actualRounded = actual?.roundToInt(); val tolerance = posted?.let { getSpeedTolerance(it) }; val warning = posted != null && actualRounded != null && tolerance != null && actualRounded > posted + tolerance; view.text = buildString { if (warning) append("⚠  "); append("${if (TrackingState.currentSpeedIsCollected.value) "Collected" else "Posted"} ${posted ?: "--"}   Actual ${actualRounded ?: "--"}"); if (posted != null && tolerance != null) append("   +$tolerance") }; view.setTextColor(if (warning) 0xFFFFB74D.toInt() else 0xFFFFFFFF.toInt()); speedClearButton?.visibility = if (posted != null) View.VISIBLE else View.GONE }
 
     private fun saveRoadFact(kind: String, note: String, onSaved: () -> Unit = {}) {
         val driveId = TrackingState.activeDriveId.value ?: run { acknowledge("No active drive"); return }; scope.launch { val point = dao.latestPoint(driveId); if (point == null) { launch(Dispatchers.Main) { acknowledge("Waiting for GPS") }; return@launch }; removeOverlappingBoundaryMarkers(kind, point.latitude, point.longitude); dao.insertMarker(MarkerEntity(driveId = driveId, timestamp = System.currentTimeMillis(), latitude = point.latitude, longitude = point.longitude, kind = kind, note = note)); launch(Dispatchers.Main) { onSaved() } }
@@ -342,6 +370,6 @@ class CollectorOverlayService : Service(), TextToSpeech.OnInitListener {
 
     private fun exportRouteData() { scope.launch { try { val root = JSONObject().put("format", "routecollector-export-v1").put("exportedAt", System.currentTimeMillis()); val drives = JSONArray(); dao.getAllDrives().forEach { d -> drives.put(JSONObject().put("id", d.id).put("startedAt", d.startedAt).put("endedAt", d.endedAt).put("title", d.title)) }; val points = JSONArray(); dao.getAllPoints().forEach { p -> points.put(JSONObject().put("id", p.id).put("driveId", p.driveId).put("timestamp", p.timestamp).put("latitude", p.latitude).put("longitude", p.longitude).put("accuracyMetres", p.accuracyMetres).put("speedMps", p.speedMps)) }; val markers = JSONArray(); dao.getAllMarkers().forEach { m -> markers.put(JSONObject().put("id", m.id).put("driveId", m.driveId).put("timestamp", m.timestamp).put("latitude", m.latitude).put("longitude", m.longitude).put("kind", m.kind).put("note", m.note)) }; root.put("drives", drives).put("points", points).put("markers", markers); val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.CANADA).format(Date()); val values = ContentValues().apply { put(MediaStore.Downloads.DISPLAY_NAME, "routecollector-$stamp.json"); put(MediaStore.Downloads.MIME_TYPE, "application/json"); put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS) }; val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: error("Could not create export"); contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(root.toString(2)) } ?: error("Could not open export"); launch(Dispatchers.Main) { acknowledge("Route data exported to Downloads") } } catch (_: Exception) { launch(Dispatchers.Main) { acknowledge("Route data export failed") } } } }
 
-    override fun onDestroy() { cameraFlashAnimator?.cancel(); cameraFlashAnimator = null; cameraButton = null; mainHandler.removeCallbacksAndMessages(null); overlayView?.let { windowManager.removeView(it) }; overlayView = null; visualAlertView = null; speedStatusView = null; speedStatusRow = null; speedClearButton = null; activeZonesPanel = null; speedSpinner = null; speedTypeSpinner = null; tts?.stop(); tts?.shutdown(); audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }; scope.cancel(); super.onDestroy() }
+    override fun onDestroy() { cameraFlashAnimator?.cancel(); cameraFlashAnimator = null; cameraButton = null; mainHandler.removeCallbacksAndMessages(null); overlayView?.let { windowManager.removeView(it) }; overlayView = null; visualAlertView = null; speedStatusView = null; speedStatusRow = null; speedClearButton = null; activeZonesPanel = null; speedSpinner = null; speedTypeSpinner = null; speedMarkerButton = null; tts?.stop(); tts?.shutdown(); audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }; scope.cancel(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 }

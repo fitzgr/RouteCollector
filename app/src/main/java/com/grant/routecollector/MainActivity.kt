@@ -1236,33 +1236,6 @@ private fun RouteCollectorScreen() {
                             }
                         }
                     }
-                    val cameraReviewPending = driverAlert?.kind == "red_light_camera_remove_available" && driverAlert?.markerId != null
-                    val hasPendingKeepItems = recentZones.isNotEmpty() ||
-                        cameraReviewPending ||
-                        activeZones.isNotEmpty() ||
-                        "camera" in activeRoadAlerts ||
-                        "deer" in activeRoadAlerts ||
-                        (collectedSpeed && postedSpeed != null)
-                    if (hasPendingKeepItems) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            TextButton(onClick = {
-                                // Keep All dismisses every pending review, not just the Recent zones list.
-                                // Never delete collected markers or paired zone endpoints here.
-                                TrackingState.recentZones.value = emptyList()
-                                if (TrackingState.driverAlert.value?.kind == "red_light_camera_remove_available") {
-                                    TrackingState.driverAlert.value = null
-                                }
-                                TrackingState.activeZoneKinds.value = emptySet()
-                                TrackingState.activeRoadAlerts.value =
-                                    TrackingState.activeRoadAlerts.value - setOf("camera", "deer")
-                                if (collectedSpeed) {
-                                    context.startService(Intent(context, DriveTrackingService::class.java).apply {
-                                        action = DriveTrackingService.ACTION_CLEAR_SPEED_ZONE
-                                    })
-                                }
-                            }) { Text("Keep all") }
-                        }
-                    }
                     if (driverAlert?.kind == "red_light_camera_remove_available" && driverAlert?.markerId != null) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Red-light camera here", modifier = Modifier.weight(1f))
@@ -1278,7 +1251,14 @@ private fun RouteCollectorScreen() {
                         }
                     }
                     if (recentZones.isNotEmpty()) {
-                        Text("Recent zones", style = MaterialTheme.typography.labelMedium)
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Recent zones", style = MaterialTheme.typography.labelMedium)
+                            TextButton(onClick = {
+                                // Only dismiss the on-screen collection history. All saved road facts,
+                                // live speed context, active zones and current alerts remain unchanged.
+                                TrackingState.recentZones.value = emptyList()
+                            }) { Text("Keep all") }
+                        }
                         recentZones.forEach { zone ->
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                                 val recentLabel = if (zone.kind == "passing") "Oncoming traffic" else zone.label

@@ -20,13 +20,14 @@ class DriveBuddyShadowClient(private val endpointUrl: String, private val token:
         collected: Boolean,
         driveId: Long,
         timestampMs: Long = System.currentTimeMillis(),
+        manualTest: Boolean = false,
     ): Boolean {
         require(targetSpeedKph in 20..130)
         val body = JSONObject().apply {
             put("schema", "drivebuddy.speed_advisory.v1")
             put("mode", "shadow_only")
             put("targetSpeedKph", targetSpeedKph)
-            put("source", if (collected) "collected" else "osm")
+            put("source", if (manualTest) "manual_test" else if (collected) "collected" else "osm")
             put("driveId", driveId.toString())
             put("timestampMs", timestampMs)
         }.toString()

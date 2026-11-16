@@ -26,6 +26,8 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import com.google.android.gms.location.*
 import com.grant.routecollector.MainActivity
+import com.grant.routecollector.BuildConfig
+import com.grant.routecollector.integration.DriveBuddyShadowClient
 import com.grant.routecollector.data.*
 import com.grant.routecollector.map.RoadSpeedResolver
 import kotlinx.coroutines.CoroutineScope
@@ -33,10 +35,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collect
 import java.util.Locale
 import kotlin.math.abs
 
 class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEventListener {
+    private data class ShadowSnapshot(val driveId: Long?, val speed: Int?, val collected: Boolean, val revision: Int)
     companion object {
         const val ACTION_START = "routecollector.START"
         const val ACTION_STOP = "routecollector.STOP"
@@ -138,6 +145,7 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
         }
         tts = TextToSpeech(this, this)
         createChannel()
+        if (BuildConfig.DEBUG) startShadowAdvisoryTransport()
     }
 
     override fun onSensorChanged(event: SensorEvent) {
@@ -210,6 +218,54 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
             ACTION_STOP -> stopTracking()
         }
         return START_NOT_STICKY
+    }
+
+    /**
+     * Optional development test only. Observes existing posted-speed state; never
+     * changes cruise control, openpilot, CAN frames, braking or steering.
+     * Does not run at all in release builds, or send unless explicitly enabled.
+     */
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    private fun startShadowAdvisoryTransport() {
+        scope.launch {
+            combine(
+                TrackingState.activeDriveId,
+                TrackingState.currentPostedSpeed,
+                TrackingState.currentSpeedIsCollected,
+                TrackingState.shadowSettingsRevision
+            ) { id, speed, collected, revision ->
+                ShadowSnapshot(id, speed, collected, revision)
+            }.debounce(300L).distinctUntilChanged().collect { snapshot ->
+                val prefs = getSharedPreferences("drivebuddy_shadow", MODE_PRIVATE)
+                if (!prefs.getBoolean("enabled", false)) {
+                    TrackingState.shadowStatus.value = "Off"
+                    return@collect
+                }
+                if (snapshot.driveId == null || snapshot.speed == null) {
+                    TrackingState.shadowStatus.value = "On: waiting for an active speed"
+                    return@collect
+                }
+                val endpoint = prefs.getString("endpoint", "")?.trim().orEmpty()
+                val token = prefs.getString("token", "").orEmpty()
+                if (!(endpoint.startsWith("http://") || endpoint.startsWith("https://")) ||
+                    token.length < 16 || snapshot.speed !in 20..130) {
+                    TrackingState.shadowStatus.value = "Invalid receiver settings or speed"
+                    return@collect
+                }
+                val result = runCatching {
+                    DriveBuddyShadowClient(endpoint, token).send(
+                        targetSpeedKph = snapshot.speed,
+                        collected = snapshot.collected,
+                        driveId = snapshot.driveId,
+                    )
+                }
+                TrackingState.shadowStatus.value = when {
+                    result.getOrNull() == true -> "Delivered ${snapshot.speed} km/h (shadow only; no car control)"
+                    result.isFailure -> "Shadow receiver unavailable: ${result.exceptionOrNull()?.javaClass?.simpleName ?: "network error"}"
+                    else -> "Shadow receiver rejected advisory"
+                }
+            }
+        }
     }
 
     private fun beginUpdates() { if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) { stopSelf(); return }; val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2_000L).setMinUpdateDistanceMeters(5f).setMinUpdateIntervalMillis(1_000L).build(); client.requestLocationUpdates(request, callback, mainLooper) }

@@ -1,0 +1,35 @@
+name: Verify DriveBuddy shadow bridge PR
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'tools/comma_shadow/**'
+      - '.github/workflows/shadow-pr-checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-protocol:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shadow advisory protocol
+        run: python3 -m unittest discover -s tools/comma_shadow/tests -v
+
+  android-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build debug APK without publishing or changing signing keys
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :app:assembleDebug --no-daemon

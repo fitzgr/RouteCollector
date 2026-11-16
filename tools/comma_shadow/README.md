@@ -7,7 +7,7 @@ The DriveBuddy Android app is `fitzgr/RouteCollector`, package `com.grant.routec
 ## What is included
 
 - Versioned **advisory-only** JSON, `drivebuddy.speed_advisory.v1`.
-- A Kotlin `DriveBuddyShadowClient` for a developer to connect to a debug-only, opt-in test flow later. **It is not called by the production tracking service yet.**
+- A Kotlin `DriveBuddyShadowClient`, connected through a **debug-only, default-off Settings toggle** to the existing DriveBuddy active posted-speed state. Release builds cannot run this bridge.
 - A token-protected Python HTTP test receiver with input validation and JSONL logs. Every acknowledgement has `appliedToVehicle=false`.
 - A sample producer and validation tests.
 
@@ -38,12 +38,14 @@ python3 send_sample.py
 python3 -m unittest discover -s tests -v
 ```
 
-For Android → development laptop testing on a **trusted Wi-Fi LAN only**, bind the receiver to a reachable interface (`--host 0.0.0.0`) and configure the Android test client for `http://<laptop-lan-ip>:8765/v1/advisory`. Do **not** expose this unencrypted test service to the internet. Android API 28+ blocks plaintext traffic by default; use a TLS test endpoint or a debug-only network security policy, not a production-wide cleartext exception.
+For Android → development laptop testing on a **trusted Wi-Fi LAN only**, bind the receiver to a reachable interface (`--host 0.0.0.0`). In the **debug build** of DriveBuddy, open **Settings → Comma bridge — SHADOW TEST ONLY**, enter `http://<laptop-lan-ip>:8765/v1/advisory` and the same token as on the laptop. Then use **Test connection (no car control)**; the receiver should log `source=manual_test` and `appliedToVehicle=false`. If it succeeds, optionally enable **Send live shadow advisories** while using DriveBuddy normally. The listener only logs effective collected/OSM speed changes; an advance sign does not change the target.
+
+**Security:** Do **not** expose this unencrypted test service to the internet. The app's `app/src/debug/AndroidManifest.xml` permits cleartext only in debug builds; release builds retain Android defaults. The shared secret is saved in app preferences; treat it as a throwaway test secret, not a reusable password. On a shared or untrusted network, instead use a properly authenticated HTTPS test endpoint.
 
 ## Next milestones and gates
 
-1. Add a **default-off debug setting** for endpoint, secret and shadow-mode enablement. Connect it only to changes in the active posted speed, preserving all existing markers and history.
-2. Verify Android-to-laptop delivery, logs, duplicate suppression and timing with recorded routes.
+1. **Implemented:** default-off debug settings, live posted-speed observation, and a manual connection test. No production service or comma installation changes.
+2. **Not yet verified on hardware:** Android-to-laptop delivery, logs, duplicate suppression and timing with recorded routes. Also validate Kotlin compilation with the PR-only Android build.
 3. Independently verify the exact Canadian 2024 RAV4 Trail fingerprint, comma hardware, supported longitudinal-control branch and safety-feature interactions using the official compatibility list and parked/bench testing. RAV4 2023–25 lists experimental longitudinal capability in non-release branches such as `nightly-dev`; this is **not** a supported Android speed-command API.
 4. Any eventual openpilot control architecture needs a separate design, safety review, and controlled test process. The current code has no such path. Never test unvalidated autonomous acceleration or braking on public roads.
 

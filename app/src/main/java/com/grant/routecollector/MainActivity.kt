@@ -63,6 +63,8 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import com.grant.routecollector.integration.DriveBuddyShadowClient
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.grant.routecollector.data.*
@@ -462,6 +464,14 @@ private fun RouteCollectorScreen() {
     }
 
     val prefs = remember { context.getSharedPreferences("routecollector_overlay", android.content.Context.MODE_PRIVATE) }
+    // Debug shadow-only receiver settings. Off by default; never a vehicle control setting.
+    val shadowPrefs = remember { context.getSharedPreferences("drivebuddy_shadow", android.content.Context.MODE_PRIVATE) }
+    var shadowEnabled by remember { mutableStateOf(shadowPrefs.getBoolean("enabled", false)) }
+    var shadowEndpoint by remember { mutableStateOf(shadowPrefs.getString("endpoint", "") ?: "") }
+    var shadowToken by remember { mutableStateOf(shadowPrefs.getString("token", "") ?: "") }
+    val shadowStatus by TrackingState.shadowStatus.collectAsStateWithLifecycle()
+    val shadowConfigValid = (shadowEndpoint.startsWith("https://") || shadowEndpoint.startsWith("http://")) &&
+        shadowToken.length >= 16 && shadowEndpoint.contains("/v1/advisory")
     var visualAlerts by remember { mutableStateOf(prefs.getBoolean("visual_alerts_enabled", true)) }
     var cameraWarning by remember { mutableIntStateOf(prefs.getInt("red_light_camera_warning_metres", 200)) }
     var toleranceSpeed by remember { mutableIntStateOf(60) }
@@ -1149,6 +1159,81 @@ private fun RouteCollectorScreen() {
                     }
                     if (showSettings) {
                         Text("Settings", style = MaterialTheme.typography.labelMedium)
+                        if (BuildConfig.DEBUG) {
+                            HorizontalDivider()
+                            Text("Comma bridge — SHADOW TEST ONLY", style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                "This sends proposed speed limits to a test receiver on your computer. " +
+                                    "It cannot change the vehicle's cruise setting, brakes, steering, or openpilot. " +
+                                    "Keep it off unless testing on a trusted network.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            OutlinedTextField(
+                                value = shadowEndpoint,
+                                onValueChange = { value ->
+                                    shadowEndpoint = value
+                                    shadowEnabled = false
+                                    shadowPrefs.edit().putString("endpoint", value).putBoolean("enabled", false).apply()
+                                    TrackingState.shadowSettingsRevision.value += 1
+                                },
+                                label = { Text("Test receiver URL") },
+                                placeholder = { Text("http://192.168.1.10:8765/v1/advisory") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = shadowToken,
+                                onValueChange = { value ->
+                                    shadowToken = value
+                                    shadowEnabled = false
+                                    shadowPrefs.edit().putString("token", value).putBoolean("enabled", false).apply()
+                                    TrackingState.shadowSettingsRevision.value += 1
+                                },
+                                label = { Text("Shared test token (at least 16 characters)") },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Send live shadow advisories")
+                                Switch(
+                                    checked = shadowEnabled,
+                                    enabled = shadowConfigValid,
+                                    onCheckedChange = { enabled ->
+                                        shadowEnabled = enabled
+                                        shadowPrefs.edit().putBoolean("enabled", enabled).apply()
+                                        TrackingState.shadowSettingsRevision.value += 1
+                                    }
+                                )
+                            }
+                            OutlinedButton(
+                                enabled = shadowConfigValid,
+                                onClick = {
+                                    val endpoint = shadowEndpoint.trim()
+                                    val token = shadowToken
+                                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                        val probe = runCatching {
+                                            DriveBuddyShadowClient(endpoint, token).send(
+                                                targetSpeedKph = 60,
+                                                collected = false,
+                                                driveId = 0L,
+                                                manualTest = true
+                                            )
+                                        }
+                                        TrackingState.shadowStatus.value = when {
+                                            probe.getOrNull() == true -> "Test delivered: 60 km/h advisory; NOT applied to car"
+                                            probe.isFailure -> "Connection test failed: ${probe.exceptionOrNull()?.javaClass?.simpleName ?: "network error"}"
+                                            else -> "Test receiver rejected the probe"
+                                        }
+                                    }
+                                }
+                            ) { Text("Test connection (no car control)") }
+                            Text("Bridge status: $shadowStatus", style = MaterialTheme.typography.bodySmall)
+                            HorizontalDivider()
+                        }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = {
                                 scope.launch {

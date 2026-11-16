@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Only debug builds may connect to a plaintext HTTP receiver on a trusted LAN.
+         Release builds retain Android's default network security behavior. -->
+    <application android:usesCleartextTraffic="true" />
+</manifest>

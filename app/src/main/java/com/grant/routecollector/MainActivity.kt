@@ -1250,15 +1250,27 @@ private fun RouteCollectorScreen() {
                             }) { Text("Remove") }
                         }
                     }
-                    if (recentZones.isNotEmpty()) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Recent zones", style = MaterialTheme.typography.labelMedium)
+                    if (recentZones.isNotEmpty() || postedSpeed != null || activeZones.isNotEmpty() || "deer" in activeRoadAlerts) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                             TextButton(onClick = {
-                                // Only dismiss the on-screen collection history. All saved road facts,
-                                // live speed context, active zones and current alerts remain unchanged.
+                                // Apply the non-destructive Keep action to all visible Recent and
+                                // Active Zone entries. Never delete persisted road facts or GPS points.
                                 TrackingState.recentZones.value = emptyList()
+                                if (postedSpeed != null) {
+                                    context.startService(Intent(context, DriveTrackingService::class.java).apply {
+                                        action = DriveTrackingService.ACTION_CLEAR_SPEED_ZONE
+                                    })
+                                }
+                                TrackingState.activeZoneKinds.value =
+                                    TrackingState.activeZoneKinds.value - setOf("community", "senior")
+                                if ("deer" in activeRoadAlerts) {
+                                    TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
+                                }
                             }) { Text("Keep all") }
                         }
+                    }
+                    if (recentZones.isNotEmpty()) {
+                        Text("Recent zones", style = MaterialTheme.typography.labelMedium)
                         recentZones.forEach { zone ->
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                                 val recentLabel = if (zone.kind == "passing") "Oncoming traffic" else zone.label

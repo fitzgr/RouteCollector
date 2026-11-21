@@ -38,6 +38,10 @@ object TrackingState {
     // Debug shadow-test transport only. Never tied to cruise/CAN control.
     val shadowSettingsRevision = MutableStateFlow(0)
     val shadowStatus = MutableStateFlow("Off")
+    // Null = unknown/unavailable/disconnected. Never treat null as a safe empty lane.
+    val shadowLeftBlindspot = MutableStateFlow<Boolean?>(null)
+    val shadowRightBlindspot = MutableStateFlow<Boolean?>(null)
+    val shadowBlindspotStatus = MutableStateFlow("Not connected")
 
     fun rememberZone(markerId: Long, kind: String, label: String, note: String) {
         val pair = Regex("pair=([A-Za-z0-9-]+)").find(note)?.groupValues?.getOrNull(1)

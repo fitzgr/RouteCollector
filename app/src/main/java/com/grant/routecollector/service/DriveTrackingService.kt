@@ -241,8 +241,8 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
                     TrackingState.shadowStatus.value = "Off"
                     return@collect
                 }
-                if (snapshot.driveId == null || snapshot.speed == null) {
-                    TrackingState.shadowStatus.value = "On: waiting for an active speed"
+                if (snapshot.driveId == null || snapshot.speed == null || !snapshot.collected) {
+                    TrackingState.shadowStatus.value = "On: waiting for a captured speed-zone marker"
                     return@collect
                 }
                 val endpoint = prefs.getString("endpoint", "")?.trim().orEmpty()
@@ -254,13 +254,13 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
                 }
                 val result = runCatching {
                     DriveBuddyShadowClient(endpoint, token).send(
-                        targetSpeedKph = snapshot.speed,
+                        postedSpeedKph = snapshot.speed,
                         collected = snapshot.collected,
                         driveId = snapshot.driveId,
                     )
                 }
                 TrackingState.shadowStatus.value = when {
-                    result.getOrNull() == true -> "Delivered ${snapshot.speed} km/h (shadow only; no car control)"
+                    result.getOrNull() == true -> "Delivered posted ${snapshot.speed} → suggested ${snapshot.speed + DriveBuddyShadowClient.SPEED_OFFSET_KPH} km/h (shadow only)"
                     result.isFailure -> "Shadow receiver unavailable: ${result.exceptionOrNull()?.javaClass?.simpleName ?: "network error"}"
                     else -> "Shadow receiver rejected advisory"
                 }

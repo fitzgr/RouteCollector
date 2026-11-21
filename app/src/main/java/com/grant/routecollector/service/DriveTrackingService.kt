@@ -35,6 +35,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -145,7 +146,10 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
         }
         tts = TextToSpeech(this, this)
         createChannel()
-        if (BuildConfig.DEBUG) startShadowAdvisoryTransport()
+        if (BuildConfig.DEBUG) {
+            startShadowAdvisoryTransport()
+            startBlindspotTelemetryReadOnly()
+        }
     }
 
     override fun onSensorChanged(event: SensorEvent) {
@@ -264,6 +268,43 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
                     result.isFailure -> "Shadow receiver unavailable: ${result.exceptionOrNull()?.javaClass?.simpleName ?: "network error"}"
                     else -> "Shadow receiver rejected advisory"
                 }
+            }
+        }
+    }
+
+    /**
+     * Read-only Comma -> Android blind-spot telemetry. Independently enabled from
+     * the Android -> Comma speed advisory sender. There are NO vehicle commands.
+     * The phone only knows the Comma's last validated telemetry; missing data
+     * must never be interpreted as a clear blind spot.
+     */
+    private fun startBlindspotTelemetryReadOnly() {
+        scope.launch {
+            while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+                val prefs = getSharedPreferences("drivebuddy_shadow", MODE_PRIVATE)
+                val enabled = prefs.getBoolean("blindspot_enabled", false)
+                val endpoint = prefs.getString("endpoint", "")?.trim().orEmpty()
+                val token = prefs.getString("token", "").orEmpty()
+                val configured = endpoint.endsWith("/v1/advisory") &&
+                    (endpoint.startsWith("http://") || endpoint.startsWith("https://")) &&
+                    token.length >= 16
+
+                if (!enabled || !configured) {
+                    TrackingState.shadowLeftBlindspot.value = null
+                    TrackingState.shadowRightBlindspot.value = null
+                    TrackingState.shadowBlindspotStatus.value =
+                        if (enabled) "Signal unavailable — receiver not configured" else "Off"
+                } else {
+                    val snapshot = runCatching {
+                        DriveBuddyShadowClient(endpoint, token).readBlindspots()
+                    }.getOrNull()
+                    TrackingState.shadowLeftBlindspot.value = snapshot?.leftOccupied
+                    TrackingState.shadowRightBlindspot.value = snapshot?.rightOccupied
+                    TrackingState.shadowBlindspotStatus.value =
+                        if (snapshot == null) "Signal unavailable — Comma data missing or stale"
+                        else "Receiving Comma blind-spot telemetry"
+                }
+                kotlinx.coroutines.delay(500L)
             }
         }
     }

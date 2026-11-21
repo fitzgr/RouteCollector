@@ -467,9 +467,15 @@ private fun RouteCollectorScreen() {
     // Debug shadow-only receiver settings. Off by default; never a vehicle control setting.
     val shadowPrefs = remember { context.getSharedPreferences("drivebuddy_shadow", android.content.Context.MODE_PRIVATE) }
     var shadowEnabled by remember { mutableStateOf(shadowPrefs.getBoolean("enabled", false)) }
+    var shadowBlindspotEnabled by remember {
+        mutableStateOf(shadowPrefs.getBoolean("blindspot_enabled", false))
+    }
     var shadowEndpoint by remember { mutableStateOf(shadowPrefs.getString("endpoint", "") ?: "") }
     var shadowToken by remember { mutableStateOf(shadowPrefs.getString("token", "") ?: "") }
     val shadowStatus by TrackingState.shadowStatus.collectAsStateWithLifecycle()
+    val shadowLeftBlindspot by TrackingState.shadowLeftBlindspot.collectAsStateWithLifecycle()
+    val shadowRightBlindspot by TrackingState.shadowRightBlindspot.collectAsStateWithLifecycle()
+    val shadowBlindspotStatus by TrackingState.shadowBlindspotStatus.collectAsStateWithLifecycle()
     val shadowConfigValid = (shadowEndpoint.startsWith("https://") || shadowEndpoint.startsWith("http://")) &&
         shadowToken.length >= 16 && shadowEndpoint.contains("/v1/advisory")
     var visualAlerts by remember { mutableStateOf(prefs.getBoolean("visual_alerts_enabled", true)) }
@@ -1173,7 +1179,9 @@ private fun RouteCollectorScreen() {
                                 onValueChange = { value ->
                                     shadowEndpoint = value
                                     shadowEnabled = false
-                                    shadowPrefs.edit().putString("endpoint", value).putBoolean("enabled", false).apply()
+                                    shadowBlindspotEnabled = false
+                                    shadowPrefs.edit().putString("endpoint", value).putBoolean("enabled", false)
+                                        .putBoolean("blindspot_enabled", false).apply()
                                     TrackingState.shadowSettingsRevision.value += 1
                                 },
                                 label = { Text("Test receiver URL") },
@@ -1186,7 +1194,9 @@ private fun RouteCollectorScreen() {
                                 onValueChange = { value ->
                                     shadowToken = value
                                     shadowEnabled = false
-                                    shadowPrefs.edit().putString("token", value).putBoolean("enabled", false).apply()
+                                    shadowBlindspotEnabled = false
+                                    shadowPrefs.edit().putString("token", value).putBoolean("enabled", false)
+                                        .putBoolean("blindspot_enabled", false).apply()
                                     TrackingState.shadowSettingsRevision.value += 1
                                 },
                                 label = { Text("Shared test token (at least 16 characters)") },
@@ -1209,6 +1219,40 @@ private fun RouteCollectorScreen() {
                                     }
                                 )
                             }
+                            HorizontalDivider()
+                            Text("Comma → Drive Buddy blind-spot monitor (read-only)",
+                                style = MaterialTheme.typography.labelLarge)
+                            Text("Receives left/right Toyota blind-spot status from the Comma over Wi-Fi. " +
+                                "The phone does not measure the sensors. A missing signal is NOT a clear lane.",
+                                style = MaterialTheme.typography.bodySmall)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Receive Comma blind-spot status")
+                                Switch(
+                                    checked = shadowBlindspotEnabled,
+                                    enabled = shadowConfigValid,
+                                    onCheckedChange = { enabled ->
+                                        shadowBlindspotEnabled = enabled
+                                        shadowPrefs.edit().putBoolean("blindspot_enabled", enabled).apply()
+                                        TrackingState.shadowSettingsRevision.value += 1
+                                    }
+                                )
+                            }
+                            Text("Blind-spot connection: $shadowBlindspotStatus",
+                                style = MaterialTheme.typography.bodySmall)
+                            Text("Left: " + when (shadowLeftBlindspot) {
+                                true -> "Vehicle detected"
+                                false -> "No detection reported"
+                                null -> "Signal unavailable"
+                            }, style = MaterialTheme.typography.bodySmall)
+                            Text("Right: " + when (shadowRightBlindspot) {
+                                true -> "Vehicle detected"
+                                false -> "No detection reported"
+                                null -> "Signal unavailable"
+                            }, style = MaterialTheme.typography.bodySmall)
+                            HorizontalDivider()
                             OutlinedButton(
                                 enabled = shadowConfigValid,
                                 onClick = {

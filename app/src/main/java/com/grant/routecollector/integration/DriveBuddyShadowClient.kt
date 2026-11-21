@@ -19,6 +19,47 @@ class DriveBuddyShadowClient(private val endpointUrl: String, private val token:
         require(token.length >= 16)
     }
 
+    data class BlindspotStatus(
+        val leftOccupied: Boolean,
+        val rightOccupied: Boolean,
+    )
+
+    /**
+     * GETs an authenticated read-only snapshot from the Comma receiver.
+     * A null return means unsupported, stale, disconnected or invalid;
+     * it never means that both blind spots are clear.
+     */
+    fun readBlindspots(): BlindspotStatus? {
+        require(endpointUrl.endsWith("/v1/advisory")) {
+            "Receiver URL must end in /v1/advisory"
+        }
+        val statusUrl = endpointUrl.removeSuffix("/v1/advisory") + "/v1/blindspots"
+        val connection = (URL(statusUrl).openConnection() as HttpURLConnection)
+        try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 1000
+            connection.readTimeout = 1000
+            connection.setRequestProperty("X-DriveBuddy-Token", token)
+            if (connection.responseCode != 200) return null
+            val snapshot = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            if (snapshot.optString("schema") != "drivebuddy.blindspot_status.v1" ||
+                snapshot.optString("mode") != "shadow_only" ||
+                snapshot.optString("source") != "openpilot.carState" ||
+                snapshot.optBoolean("appliedToVehicle", true) ||
+                !snapshot.optBoolean("available", false) ||
+                snapshot.opt("leftBlindspot") !is Boolean ||
+                snapshot.opt("rightBlindspot") !is Boolean) return null
+            val timestamp = snapshot.optLong("capturedAtMs", -1L)
+            if (timestamp <= 0L || kotlin.math.abs(System.currentTimeMillis() - timestamp) > 2500L) return null
+            return BlindspotStatus(
+                leftOccupied = snapshot.getBoolean("leftBlindspot"),
+                rightOccupied = snapshot.getBoolean("rightBlindspot"),
+            )
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     fun send(
         postedSpeedKph: Int,
         collected: Boolean,

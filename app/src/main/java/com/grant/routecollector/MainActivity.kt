@@ -1127,22 +1127,27 @@ private fun RouteCollectorScreen() {
                                 }
                             }
                             Button(onClick = {
+                                // Snapshot the selected speed and type before the async GPS save.
                                 val driveId = activeDriveId
+                                val speedToSave = markerSpeed
+                                val advance = markerType == "Advance sign"
                                 if (driveId != null) scope.launch {
                                     val point = dao.latestPoint(driveId)
                                     if (point != null) {
-                                        val advance = markerType == "Advance sign"
                                         dao.insertMarker(MarkerEntity(
                                             driveId = driveId, timestamp = System.currentTimeMillis(),
                                             latitude = point.latitude, longitude = point.longitude,
                                             kind = if (advance) "speed_advance" else "speed",
-                                            note = (if (advance) "Speed limit $markerSpeed advance sign" else "Speed limit $markerSpeed") + "; bearing=${travelBearing?.roundToInt() ?: -1}"
+                                            note = (if (advance) "Speed limit $speedToSave advance sign" else "Speed limit $speedToSave") + "; bearing=${travelBearing?.roundToInt() ?: -1}"
                                         ))
-                                        if (!advance) {
+                                        if (advance) {
+                                            // The next speed marker will usually start the announced zone.
+                                            markerType = "Zone begins"
+                                        } else {
                                             TrackingState.currentSpeedIsCollected.value = true
-                                            TrackingState.currentPostedSpeed.value = markerSpeed
+                                            TrackingState.currentPostedSpeed.value = speedToSave
                                         }
-                                        speakPrompt(if (advance) "$markerSpeed kilometre advance sign marked" else "$markerSpeed kilometre zone start marked")
+                                        speakPrompt(if (advance) "$speedToSave kilometre advance sign marked" else "$speedToSave kilometre zone start marked")
                                     }
                                 }
                             }) { Text("Set") }

@@ -22,7 +22,9 @@ import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONObject
 import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -335,13 +337,19 @@ private fun RouteCollectorScreen() {
             var keepMonitoring = true
             while (keepMonitoring && (showSettings || updateCheckCount == 1)) {
                 val manifestUrl = "https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json?check=" + System.currentTimeMillis()
-                val manifestConnection = (URL(manifestUrl).openConnection() as HttpURLConnection).apply {
-                    instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
-                    useCaches = false
-                    setRequestProperty("Cache-Control", "no-cache, no-store")
+                // Android prohibits blocking network I/O on the UI thread.
+                val body = withContext(Dispatchers.IO) {
+                    val connection = (URL(manifestUrl).openConnection() as HttpURLConnection).apply {
+                        instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
+                        useCaches = false
+                        setRequestProperty("Cache-Control", "no-cache, no-store")
+                    }
+                    try {
+                        connection.inputStream.bufferedReader().use { it.readText() }
+                    } finally {
+                        connection.disconnect()
+                    }
                 }
-                val body = manifestConnection.inputStream.bufferedReader().use { it.readText() }
-                manifestConnection.disconnect()
                 val json = JSONObject(body)
                 val code = json.getInt("versionCode")
                 latestBuildCode = code
@@ -363,15 +371,20 @@ private fun RouteCollectorScreen() {
                     keepMonitoring = false
                 } else {
                     updateStatus = "Installed build ${BuildConfig.VERSION_CODE} is in sync with GitHub build $code. Checking Actions…"
-                    val actionsUrl = "https://api.github.com/repos/fitzgr/RouteCollector/actions/runs?branch=feature/google-maps-overlay&per_page=10&check=" + System.currentTimeMillis()
-                    val actionsConnection = (URL(actionsUrl).openConnection() as HttpURLConnection).apply {
-                        instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
-                        useCaches = false
-                        setRequestProperty("Accept", "application/vnd.github+json")
-                        setRequestProperty("Cache-Control", "no-cache, no-store")
+                    val actionsUrl = "https://api.github.com/repos/fitzgr/RouteCollector/actions/runs?branch=main&per_page=10&check=" + System.currentTimeMillis()
+                    val actionsBody = withContext(Dispatchers.IO) {
+                        val connection = (URL(actionsUrl).openConnection() as HttpURLConnection).apply {
+                            instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
+                            useCaches = false
+                            setRequestProperty("Accept", "application/vnd.github+json")
+                            setRequestProperty("Cache-Control", "no-cache, no-store")
+                        }
+                        try {
+                            connection.inputStream.bufferedReader().use { it.readText() }
+                        } finally {
+                            connection.disconnect()
+                        }
                     }
-                    val actionsBody = actionsConnection.inputStream.bufferedReader().use { it.readText() }
-                    actionsConnection.disconnect()
                     val runs = JSONObject(actionsBody).getJSONArray("workflow_runs")
                     var activeCount = 0
                     for (i in 0 until runs.length()) {
@@ -387,10 +400,11 @@ private fun RouteCollectorScreen() {
                     }
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             updateReady = false
             latestApkUrl = null
-            updateStatus = "Could not complete GitHub update check"
+            updateStatus = "Could not complete GitHub update check (${e.javaClass.simpleName})"
             updateWebUrl = "https://github.com/fitzgr/RouteCollector/releases/tag/latest-debug"
         }
         updateLastCheckedAt = System.currentTimeMillis()
@@ -428,13 +442,19 @@ private fun RouteCollectorScreen() {
                         updateBusy = true
                         updateStatus = "Downloading..."
                         try {
-                            val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-                            val apk = File(dir, "routecollector-update.apk")
-                            val connection = (URL(apkUrl).openConnection() as HttpURLConnection).apply {
-                                instanceFollowRedirects = true; connectTimeout = 10000; readTimeout = 30000
+                            val apk = withContext(Dispatchers.IO) {
+                                val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+                                val file = File(dir, "routecollector-update.apk")
+                                val connection = (URL(apkUrl).openConnection() as HttpURLConnection).apply {
+                                    instanceFollowRedirects = true; connectTimeout = 10000; readTimeout = 30000
+                                }
+                                try {
+                                    connection.inputStream.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
+                                } finally {
+                                    connection.disconnect()
+                                }
+                                file
                             }
-                            connection.inputStream.use { input -> apk.outputStream().use { output -> input.copyTo(output) } }
-                            connection.disconnect()
                             val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apk)
                             context.startActivity(Intent(Intent.ACTION_VIEW).apply {
                                 setDataAndType(uri, "application/vnd.android.package-archive")
@@ -1189,10 +1209,19 @@ private fun RouteCollectorScreen() {
                                 if (apkUrl != null && !updateBusy) scope.launch {
                                     updateBusy = true; updateStatus = "Downloading..."
                                     try {
-                                        val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-                                        val apk = File(dir, "routecollector-update.apk")
-                                        val connection = (URL(apkUrl).openConnection() as HttpURLConnection).apply { instanceFollowRedirects = true; connectTimeout = 10000; readTimeout = 30000 }
-                                        connection.inputStream.use { input -> apk.outputStream().use { output -> input.copyTo(output) } }; connection.disconnect()
+                                        val apk = withContext(Dispatchers.IO) {
+                                            val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+                                            val file = File(dir, "routecollector-update.apk")
+                                            val connection = (URL(apkUrl).openConnection() as HttpURLConnection).apply {
+                                                instanceFollowRedirects = true; connectTimeout = 10000; readTimeout = 30000
+                                            }
+                                            try {
+                                                connection.inputStream.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
+                                            } finally {
+                                                connection.disconnect()
+                                            }
+                                            file
+                                        }
                                         val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apk)
                                         context.startActivity(Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, "application/vnd.android.package-archive"); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK) })
                                         updateStatus = "Installer opened"

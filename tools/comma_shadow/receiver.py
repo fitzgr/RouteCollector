@@ -55,7 +55,7 @@ def validate(payload, now_ms=None):
     }
 
 
-def make_handler(token, log_path):
+def make_handler(token, log_path, blindspot_provider=None):
     lock = threading.Lock()
     last_message = {"record": None}
 
@@ -65,10 +65,48 @@ def make_handler(token, log_path):
             return bool(token) and hmac.compare_digest(supplied, token)
 
         def do_GET(self):
-            if self.path != "/v1/status":
+            if self.path not in ("/v1/status", "/v1/blindspots"):
                 return self.respond(404, {"error": "unknown path", "appliedToVehicle": False})
             if not self.authorized():
                 return self.respond(401, {"error": "unauthorized", "appliedToVehicle": False})
+            if self.path == "/v1/blindspots":
+                snapshot = blindspot_provider() if blindspot_provider is not None else None
+                if not snapshot or not snapshot.get("available"):
+                    snapshot = {
+                        "schema": "drivebuddy.blindspot_status.v1",
+                        "mode": "shadow_only",
+                        "source": "unavailable",
+                        "appliedToVehicle": False,
+                        "available": False,
+                        "leftBlindspot": None,
+                        "rightBlindspot": None,
+                        "capturedAtMs": None,
+                    }
+                # Never interpret unverified or stale sensor data as a clear lane.
+                stamp = snapshot.get("capturedAtMs")
+                valid = (
+                    snapshot.get("schema") == "drivebuddy.blindspot_status.v1"
+                    and snapshot.get("mode") == "shadow_only"
+                    and snapshot.get("source") == "openpilot.carState"
+                    and snapshot.get("appliedToVehicle") is False
+                    and snapshot.get("available") is True
+                    and type(snapshot.get("leftBlindspot")) is bool
+                    and type(snapshot.get("rightBlindspot")) is bool
+                    and type(stamp) is int
+                    and abs(int(time.time() * 1000) - stamp) < 2500
+                )
+                if not valid:
+                    snapshot = {
+                        "schema": "drivebuddy.blindspot_status.v1",
+                        "mode": "shadow_only",
+                        "source": "unavailable",
+                        "appliedToVehicle": False,
+                        "available": False,
+                        "leftBlindspot": None,
+                        "rightBlindspot": None,
+                        "capturedAtMs": None,
+                    }
+                return self.respond(200, snapshot)
             with lock:
                 record = last_message["record"]
             self.respond(200, {
@@ -126,11 +164,20 @@ def main():
                         help="Use a private trusted LAN interface only for phone testing")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--log", default="shadow-advisories.jsonl")
+    parser.add_argument("--comma-carstate", action="store_true",
+                        help="Read carState from installed openpilot, read-only; off by default")
     args = parser.parse_args()
     token = os.environ.get("DRIVEBUDDY_SHADOW_TOKEN", "")
     if len(token) < 16:
         parser.error("DRIVEBUDDY_SHADOW_TOKEN must be >=16 characters")
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(token, args.log))
+    reader = None
+    if args.comma_carstate:
+        from comma_carstate_reader import CommaCarStateReader
+        reader = CommaCarStateReader()
+        reader.start()
+    server = ThreadingHTTPServer(
+        (args.host, args.port), make_handler(token, args.log, reader.snapshot if reader else None)
+    )
     print(f"SHADOW ONLY: http://{args.host}:{args.port}/v1/advisory", flush=True)
     print("No cruise, CAN, acceleration, braking or steering functions", flush=True)
     try:
@@ -139,6 +186,8 @@ def main():
         pass
     finally:
         server.server_close()
+        if reader:
+            reader.stop()
 
 
 if __name__ == "__main__":

@@ -5,28 +5,35 @@ import java.net.URL
 import org.json.JSONObject
 
 /**
- * Shadow-only test transport. This class sends road-speed ADVISORIES to a test receiver.
- * It has no CAN, OBD, openpilot-control, or cruise-control functionality.
- * Call from a background/IO dispatcher, never the Android UI thread.
+ * Advisory-only Drive Buddy speed suggestion. NEVER commands Toyota, CAN or
+ * openpilot cruise/longitudinal control.
  */
 class DriveBuddyShadowClient(private val endpointUrl: String, private val token: String) {
+    companion object {
+        // User-requested *display-only* preference. This may exceed posted limits.
+        const val SPEED_OFFSET_KPH = 8
+    }
+
     init {
         require(endpointUrl.startsWith("http://") || endpointUrl.startsWith("https://"))
-        require(token.isNotBlank())
+        require(token.length >= 16)
     }
 
     fun send(
-        targetSpeedKph: Int,
+        postedSpeedKph: Int,
         collected: Boolean,
         driveId: Long,
         timestampMs: Long = System.currentTimeMillis(),
         manualTest: Boolean = false,
     ): Boolean {
-        require(targetSpeedKph in 20..130)
+        require(postedSpeedKph in 20..130)
+        val suggestedCruiseKph = postedSpeedKph + SPEED_OFFSET_KPH
         val body = JSONObject().apply {
-            put("schema", "drivebuddy.speed_advisory.v1")
+            put("schema", "drivebuddy.speed_advisory.v2")
             put("mode", "shadow_only")
-            put("targetSpeedKph", targetSpeedKph)
+            put("postedSpeedKph", postedSpeedKph)
+            put("offsetKph", SPEED_OFFSET_KPH)
+            put("targetSpeedKph", suggestedCruiseKph)
             put("source", if (manualTest) "manual_test" else if (collected) "collected" else "osm")
             put("driveId", driveId.toString())
             put("timestampMs", timestampMs)
@@ -41,12 +48,13 @@ class DriveBuddyShadowClient(private val endpointUrl: String, private val token:
             connection.setRequestProperty("Content-Type", "application/json")
             connection.setRequestProperty("X-DriveBuddy-Token", token)
             connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            // A successful receiver explicitly says appliedToVehicle=false.
             if (connection.responseCode != 200) return false
             val response = connection.inputStream.bufferedReader().use { it.readText() }
-            val acknowledgement = JSONObject(response)
-            return acknowledgement.optBoolean("accepted", false) &&
-                !acknowledgement.optBoolean("appliedToVehicle", true)
+            val ack = JSONObject(response)
+            return ack.optBoolean("accepted", false) &&
+                !ack.optBoolean("appliedToVehicle", true) &&
+                ack.optInt("postedSpeedKph", -1) == postedSpeedKph &&
+                ack.optInt("targetSpeedKph", -1) == suggestedCruiseKph
         } finally {
             connection.disconnect()
         }

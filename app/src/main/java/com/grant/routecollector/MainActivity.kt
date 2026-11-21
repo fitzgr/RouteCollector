@@ -1163,7 +1163,7 @@ private fun RouteCollectorScreen() {
                             HorizontalDivider()
                             Text("Comma bridge — SHADOW TEST ONLY", style = MaterialTheme.typography.labelLarge)
                             Text(
-                                "This sends proposed speed limits to a test receiver on your computer. " +
+                                "This sends collected speed limits and a +8 km/h advisory target to a test receiver. " +
                                     "It cannot change the vehicle's cruise setting, brakes, steering, or openpilot. " +
                                     "Keep it off unless testing on a trusted network.",
                                 style = MaterialTheme.typography.bodySmall
@@ -1217,14 +1217,14 @@ private fun RouteCollectorScreen() {
                                     scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                         val probe = runCatching {
                                             DriveBuddyShadowClient(endpoint, token).send(
-                                                targetSpeedKph = 60,
+                                                postedSpeedKph = 60,
                                                 collected = false,
                                                 driveId = 0L,
                                                 manualTest = true
                                             )
                                         }
                                         TrackingState.shadowStatus.value = when {
-                                            probe.getOrNull() == true -> "Test delivered: 60 km/h advisory; NOT applied to car"
+                                            probe.getOrNull() == true -> "Test delivered: posted 60, suggested 68 km/h; NOT applied to car"
                                             probe.isFailure -> "Connection test failed: ${probe.exceptionOrNull()?.javaClass?.simpleName ?: "network error"}"
                                             else -> "Test receiver rejected the probe"
                                         }

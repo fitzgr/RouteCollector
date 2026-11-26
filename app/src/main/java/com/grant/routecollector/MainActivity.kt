@@ -22,7 +22,9 @@ import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONObject
 import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -65,6 +67,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.grant.routecollector.integration.DriveBuddyShadowClient
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.grant.routecollector.data.*
@@ -312,6 +316,7 @@ private fun RouteCollectorScreen() {
     val actualSpeed by TrackingState.latestSpeedKph.collectAsStateWithLifecycle()
     val collectedSpeed by TrackingState.currentSpeedIsCollected.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }
+    var settingsSection by remember { mutableStateOf("Update") }
     var driveSummary by remember { mutableStateOf<DriveSummary?>(null) }
     var autoStartArmed by remember { mutableStateOf(true) }
     var autoStartInProgress by remember { mutableStateOf(false) }
@@ -329,7 +334,8 @@ private fun RouteCollectorScreen() {
     val updatePrefs = remember { context.getSharedPreferences("routecollector_updates", android.content.Context.MODE_PRIVATE) }
     var dismissedUpdateBuild by remember { mutableIntStateOf(updatePrefs.getInt("dismissed_update_build", -1)) }
     var latestBuildCode by remember { mutableIntStateOf(-1) }
-    val checkLatestUpdate: suspend () -> Unit = {
+    val checkLatestUpdate: suspend () -> Unit = check@{
+        if (updateBusy) return@check
         updateBusy = true
         updateCheckCount += 1
         updateStatus = "Comparing installed version with GitHub…"
@@ -337,13 +343,19 @@ private fun RouteCollectorScreen() {
             var keepMonitoring = true
             while (keepMonitoring && (showSettings || updateCheckCount == 1)) {
                 val manifestUrl = "https://github.com/fitzgr/RouteCollector/releases/download/latest-debug/update.json?check=" + System.currentTimeMillis()
-                val manifestConnection = (URL(manifestUrl).openConnection() as HttpURLConnection).apply {
-                    instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
-                    useCaches = false
-                    setRequestProperty("Cache-Control", "no-cache, no-store")
+                // Android prohibits blocking network I/O on the UI thread.
+                val body = withContext(Dispatchers.IO) {
+                    val connection = (URL(manifestUrl).openConnection() as HttpURLConnection).apply {
+                        instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
+                        useCaches = false
+                        setRequestProperty("Cache-Control", "no-cache, no-store")
+                    }
+                    try {
+                        connection.inputStream.bufferedReader().use { it.readText() }
+                    } finally {
+                        connection.disconnect()
+                    }
                 }
-                val body = manifestConnection.inputStream.bufferedReader().use { it.readText() }
-                manifestConnection.disconnect()
                 val json = JSONObject(body)
                 val code = json.getInt("versionCode")
                 latestBuildCode = code
@@ -361,19 +373,24 @@ private fun RouteCollectorScreen() {
 
                 if (updateReady) {
                     updateStatus = "New GitHub build available: $name (build $code)"
-                    if (dismissedUpdateBuild != code) showUpdateDialog = true
+                    if (!showSettings && dismissedUpdateBuild != code) showUpdateDialog = true
                     keepMonitoring = false
                 } else {
                     updateStatus = "Installed build ${BuildConfig.VERSION_CODE} is in sync with GitHub build $code. Checking Actions…"
-                    val actionsUrl = "https://api.github.com/repos/fitzgr/RouteCollector/actions/runs?branch=feature/google-maps-overlay&per_page=10&check=" + System.currentTimeMillis()
-                    val actionsConnection = (URL(actionsUrl).openConnection() as HttpURLConnection).apply {
-                        instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
-                        useCaches = false
-                        setRequestProperty("Accept", "application/vnd.github+json")
-                        setRequestProperty("Cache-Control", "no-cache, no-store")
+                    val actionsUrl = "https://api.github.com/repos/fitzgr/RouteCollector/actions/runs?branch=main&per_page=10&check=" + System.currentTimeMillis()
+                    val actionsBody = withContext(Dispatchers.IO) {
+                        val connection = (URL(actionsUrl).openConnection() as HttpURLConnection).apply {
+                            instanceFollowRedirects = true; connectTimeout = 8000; readTimeout = 8000
+                            useCaches = false
+                            setRequestProperty("Accept", "application/vnd.github+json")
+                            setRequestProperty("Cache-Control", "no-cache, no-store")
+                        }
+                        try {
+                            connection.inputStream.bufferedReader().use { it.readText() }
+                        } finally {
+                            connection.disconnect()
+                        }
                     }
-                    val actionsBody = actionsConnection.inputStream.bufferedReader().use { it.readText() }
-                    actionsConnection.disconnect()
                     val runs = JSONObject(actionsBody).getJSONArray("workflow_runs")
                     var activeCount = 0
                     for (i in 0 until runs.length()) {
@@ -389,14 +406,16 @@ private fun RouteCollectorScreen() {
                     }
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             updateReady = false
             latestApkUrl = null
-            updateStatus = "Could not complete GitHub update check"
+            updateStatus = "Could not complete GitHub update check (${e.javaClass.simpleName})"
             updateWebUrl = "https://github.com/fitzgr/RouteCollector/releases/tag/latest-debug"
+        } finally {
+            updateLastCheckedAt = System.currentTimeMillis()
+            updateBusy = false
         }
-        updateLastCheckedAt = System.currentTimeMillis()
-        updateBusy = false
     }
     LaunchedEffect(Unit) {
         delay(1200)
@@ -430,13 +449,19 @@ private fun RouteCollectorScreen() {
                         updateBusy = true
                         updateStatus = "Downloading..."
                         try {
-                            val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-                            val apk = File(dir, "routecollector-update.apk")
-                            val connection = (URL(apkUrl).openConnection() as HttpURLConnection).apply {
-                                instanceFollowRedirects = true; connectTimeout = 10000; readTimeout = 30000
+                            val apk = withContext(Dispatchers.IO) {
+                                val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+                                val file = File(dir, "routecollector-update.apk")
+                                val connection = (URL(apkUrl).openConnection() as HttpURLConnection).apply {
+                                    instanceFollowRedirects = true; connectTimeout = 10000; readTimeout = 30000
+                                }
+                                try {
+                                    connection.inputStream.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
+                                } finally {
+                                    connection.disconnect()
+                                }
+                                file
                             }
-                            connection.inputStream.use { input -> apk.outputStream().use { output -> input.copyTo(output) } }
-                            connection.disconnect()
                             val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apk)
                             context.startActivity(Intent(Intent.ACTION_VIEW).apply {
                                 setDataAndType(uri, "application/vnd.android.package-archive")
@@ -492,6 +517,20 @@ private fun RouteCollectorScreen() {
     val walkingCountdown by TrackingState.walkingAutoStopSeconds.collectAsStateWithLifecycle()
     val driverAlert by TrackingState.driverAlert.collectAsStateWithLifecycle()
     val recentZones by TrackingState.recentZones.collectAsStateWithLifecycle()
+    // Acknowledging a review must not reset navigation or the road-zone tracker.
+    var dismissedActiveReviews by remember(activeDriveId) { mutableStateOf(emptySet<String>()) }
+    var speedReviewDismissed by remember(activeDriveId, postedSpeed) { mutableStateOf(false) }
+    val activeReviewKinds = activeZones.intersect(setOf("community", "senior")) +
+        activeRoadAlerts.intersect(setOf("camera", "deer"))
+    LaunchedEffect(activeReviewKinds) {
+        dismissedActiveReviews = dismissedActiveReviews.intersect(activeReviewKinds)
+    }
+    val visibleActiveReviews = activeReviewKinds - dismissedActiveReviews
+    val visibleSpeedReview = postedSpeed != null && !speedReviewDismissed
+    val visibleCameraPrompt = driverAlert?.kind == "red_light_camera_remove_available" && driverAlert?.markerId != null
+    fun keepActiveReview(kind: String) {
+        dismissedActiveReviews = dismissedActiveReviews + kind
+    }
     val hardBrakeActive by TrackingState.hardBrakeActive.collectAsStateWithLifecycle()
     val hardBrakeG by TrackingState.hardBrakeG.collectAsStateWithLifecycle()
     val hardBrakeCount by TrackingState.hardBrakeCount.collectAsStateWithLifecycle()
@@ -915,6 +954,259 @@ private fun RouteCollectorScreen() {
         return
     }
 
+    // Settings are independent of the collector card, so even a small phone can
+    // reach every control without squeezing the navigation map.
+    if (showSettings) {
+        Dialog(
+            onDismissRequest = { showSettings = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Column(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Drive Buddy settings", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { showSettings = false }) { Text("Done") }
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        val sections = if (BuildConfig.DEBUG) listOf("Update", "General", "Comma") else listOf("Update", "General")
+                        sections.forEach { section ->
+                            if (settingsSection == section) {
+                                Button(onClick = { settingsSection = section }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp)) { Text(section, maxLines = 1) }
+                            } else {
+                                OutlinedButton(onClick = { settingsSection = section }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp)) { Text(section, maxLines = 1) }
+                            }
+                        }
+                    }
+                    HorizontalDivider()
+                    key(settingsSection) {
+                        Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).imePadding(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            when (settingsSection) {
+                                "Update" -> {
+                                    Text("Software update", style = MaterialTheme.typography.titleMedium)
+                        Text("Installed: ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.bodySmall)
+                        latestBuildLabel?.let { Text("Latest: $it", style = MaterialTheme.typography.bodySmall) }
+                        latestBuildDuration?.let { Text("Last build duration: $it", style = MaterialTheme.typography.bodySmall) }
+                        if (latestChanges.isNotEmpty()) {
+                            Text("What’s new", style = MaterialTheme.typography.labelLarge)
+                            latestChanges.take(5).forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
+                        }
+                        Text("Update: $updateStatus", style = MaterialTheme.typography.bodySmall)
+                        updateLastCheckedAt?.let { checked ->
+                            Text("Last checked: " + java.text.SimpleDateFormat("h:mm:ss a", Locale.getDefault()).format(Date(checked)) + " • check #$updateCheckCount", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = {
+                                if (!updateBusy) scope.launch { checkLatestUpdate() }
+                            }, enabled = !updateBusy) { Text(if (updateBusy) "Checking..." else "Check now") }
+                            Button(onClick = {
+                                val apkUrl = latestApkUrl
+                                if (apkUrl != null && !updateBusy) scope.launch {
+                                    updateBusy = true; updateStatus = "Downloading..."
+                                    try {
+                                        val apk = withContext(Dispatchers.IO) {
+                                            val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+                                            val file = File(dir, "routecollector-update.apk")
+                                            val connection = (URL(apkUrl).openConnection() as HttpURLConnection).apply {
+                                                instanceFollowRedirects = true; connectTimeout = 10000; readTimeout = 30000
+                                            }
+                                            try {
+                                                connection.inputStream.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
+                                            } finally {
+                                                connection.disconnect()
+                                            }
+                                            file
+                                        }
+                                        val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apk)
+                                        context.startActivity(Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, "application/vnd.android.package-archive"); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK) })
+                                        updateStatus = "Installer opened"
+                                    } catch (_: Exception) { updateStatus = "Download failed - GitHub sign-in may be required" }
+                                    updateBusy = false
+                                }
+                            }, enabled = updateReady && latestApkUrl != null && !updateBusy) { Text("Download update") }
+                            
+                        }
+
+                        OutlinedButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(updateWebUrl ?: "https://github.com/fitzgr/RouteCollector/releases/tag/latest-debug"))) }) { Text("Open latest release in browser") }
+                        Text("Install the update when safely parked. Android may ask you to allow installs from this app.", style = MaterialTheme.typography.bodySmall)
+
+                                }
+                                "General" -> {
+                                    Text("General configuration", style = MaterialTheme.typography.titleMedium)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = {
+                                scope.launch {
+                                    restoreStatus = try {
+                                        "Saved " + RouteDataExporter.exportToDownloads(context, dao)
+                                    } catch (e: Exception) {
+                                        "Backup failed: ${e.message ?: "unknown error"}"
+                                    }
+                                }
+                            }) { Text("Backup JSON") }
+                            OutlinedButton(onClick = {
+                                restoreLauncher.launch(arrayOf("application/json", "text/plain"))
+                            }) { Text("Restore JSON") }
+                        }
+                        restoreStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Visual alerts")
+                            Switch(checked = visualAlerts, onCheckedChange = { visualAlerts = it; prefs.edit().putBoolean("visual_alerts_enabled", it).apply() })
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Camera warning: $cameraWarning m")
+                            Row {
+                                TextButton(onClick = { cameraWarning = (cameraWarning - 50).coerceAtLeast(100); prefs.edit().putInt("red_light_camera_warning_metres", cameraWarning).apply() }) { Text("−50") }
+                                TextButton(onClick = { cameraWarning = (cameraWarning + 50).coerceAtMost(500); prefs.edit().putInt("red_light_camera_warning_metres", cameraWarning).apply() }) { Text("+50") }
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Hard braking: %.2f g".format(Locale.CANADA, hardBrakeThresholdG))
+                            Row {
+                                TextButton(onClick = {
+                                    hardBrakeThresholdG = (hardBrakeThresholdG - 0.05f).coerceAtLeast(0.15f)
+                                    prefs.edit().putFloat("hard_brake_threshold_g", hardBrakeThresholdG).apply()
+                                }) { Text("−") }
+                                TextButton(onClick = {
+                                    hardBrakeThresholdG = (hardBrakeThresholdG + 0.05f).coerceAtMost(0.60f)
+                                    prefs.edit().putFloat("hard_brake_threshold_g", hardBrakeThresholdG).apply()
+                                }) { Text("+") }
+                            }
+                        }
+                        Text("0.30 g is the starting calibration. Compare Drive Buddy events with Ajusto and tune this over time.", style = MaterialTheme.typography.bodySmall)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Speed tolerance: $toleranceSpeed +$toleranceValue")
+                            Row {
+                                TextButton(onClick = {
+                                    toleranceSpeed = if (toleranceSpeed >= 110) 40 else toleranceSpeed + 10
+                                    toleranceValue = prefs.getInt("speed_tolerance_$toleranceSpeed", if (toleranceSpeed >= 100) 9 else 8)
+                                }) { Text("Speed") }
+                                TextButton(onClick = { toleranceValue = (toleranceValue - 1).coerceAtLeast(0); prefs.edit().putInt("speed_tolerance_$toleranceSpeed", toleranceValue).apply() }) { Text("−") }
+                                TextButton(onClick = { toleranceValue = (toleranceValue + 1).coerceAtMost(20); prefs.edit().putInt("speed_tolerance_$toleranceSpeed", toleranceValue).apply() }) { Text("+") }
+                            }
+                        }
+                                }
+                                "Comma" -> {
+                        if (BuildConfig.DEBUG) {
+                            HorizontalDivider()
+                            Text("Comma bridge — SHADOW TEST ONLY", style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                "This sends collected speed limits and a +8 km/h advisory target to a test receiver. " +
+                                    "It cannot change the vehicle's cruise setting, brakes, steering, or openpilot. " +
+                                    "Keep it off unless testing on a trusted network.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            OutlinedTextField(
+                                value = shadowEndpoint,
+                                onValueChange = { value ->
+                                    shadowEndpoint = value
+                                    shadowEnabled = false
+                                    shadowBlindspotEnabled = false
+                                    shadowPrefs.edit().putString("endpoint", value).putBoolean("enabled", false)
+                                        .putBoolean("blindspot_enabled", false).apply()
+                                    TrackingState.shadowSettingsRevision.value += 1
+                                },
+                                label = { Text("Test receiver URL") },
+                                placeholder = { Text("http://192.168.1.10:8765/v1/advisory") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = shadowToken,
+                                onValueChange = { value ->
+                                    shadowToken = value
+                                    shadowEnabled = false
+                                    shadowBlindspotEnabled = false
+                                    shadowPrefs.edit().putString("token", value).putBoolean("enabled", false)
+                                        .putBoolean("blindspot_enabled", false).apply()
+                                    TrackingState.shadowSettingsRevision.value += 1
+                                },
+                                label = { Text("Shared test token (at least 16 characters)") },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Send live shadow advisories")
+                                Switch(
+                                    checked = shadowEnabled,
+                                    enabled = shadowConfigValid,
+                                    onCheckedChange = { enabled ->
+                                        shadowEnabled = enabled
+                                        shadowPrefs.edit().putBoolean("enabled", enabled).apply()
+                                        TrackingState.shadowSettingsRevision.value += 1
+                                    }
+                                )
+                            }
+                            HorizontalDivider()
+                            Text("Comma → Drive Buddy blind-spot monitor (read-only)",
+                                style = MaterialTheme.typography.labelLarge)
+                            Text("Receives left/right Toyota blind-spot status from the Comma over Wi-Fi. " +
+                                "The phone does not measure the sensors. A missing signal is NOT a clear lane.",
+                                style = MaterialTheme.typography.bodySmall)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Receive Comma blind-spot status")
+                                Switch(
+                                    checked = shadowBlindspotEnabled,
+                                    enabled = shadowConfigValid,
+                                    onCheckedChange = { enabled ->
+                                        shadowBlindspotEnabled = enabled
+                                        shadowPrefs.edit().putBoolean("blindspot_enabled", enabled).apply()
+                                        TrackingState.shadowSettingsRevision.value += 1
+                                    }
+                                )
+                            }
+                            Text("Blind-spot connection: $shadowBlindspotStatus",
+                                style = MaterialTheme.typography.bodySmall)
+                            Text("Left: " + when (shadowLeftBlindspot) {
+                                true -> "Vehicle detected"
+                                false -> "No detection reported"
+                                null -> "Signal unavailable"
+                            }, style = MaterialTheme.typography.bodySmall)
+                            Text("Right: " + when (shadowRightBlindspot) {
+                                true -> "Vehicle detected"
+                                false -> "No detection reported"
+                                null -> "Signal unavailable"
+                            }, style = MaterialTheme.typography.bodySmall)
+                            HorizontalDivider()
+                            OutlinedButton(
+                                enabled = shadowConfigValid,
+                                onClick = {
+                                    val endpoint = shadowEndpoint.trim()
+                                    val token = shadowToken
+                                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                        val probe = runCatching {
+                                            DriveBuddyShadowClient(endpoint, token).send(
+                                                postedSpeedKph = 60,
+                                                collected = false,
+                                                driveId = 0L,
+                                                manualTest = true
+                                            )
+                                        }
+                                        TrackingState.shadowStatus.value = when {
+                                            probe.getOrNull() == true -> "Test delivered: posted 60, suggested 68 km/h; NOT applied to car"
+                                            probe.isFailure -> "Connection test failed: ${probe.exceptionOrNull()?.javaClass?.simpleName ?: "network error"}"
+                                            else -> "Test receiver rejected the probe"
+                                        }
+                                    }
+                                }
+                            ) { Text("Test connection (no car control)") }
+                            Text("Bridge status: $shadowStatus", style = MaterialTheme.typography.bodySmall)
+                            HorizontalDivider()
+                        }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Scaffold { padding ->
         Column(
             Modifier.padding(padding).padding(horizontal = 10.dp, vertical = 4.dp).fillMaxSize(),
@@ -940,7 +1232,7 @@ private fun RouteCollectorScreen() {
                             }
                         }, modifier = Modifier.height(34.dp), colors = ButtonDefaults.buttonColors(containerColor = if (activeDriveId == null) Color(0xFFDDEEDD) else Color(0xFFF4C7C3), contentColor = Color(0xFF263238)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text(if (activeDriveId == null) "▶ Start" else "■ Stop", style = MaterialTheme.typography.bodySmall) }
                         Button(onClick = { showHistory = true }, modifier = Modifier.height(34.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE0E0E0), contentColor = Color(0xFF37474F)), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("History", style = MaterialTheme.typography.bodySmall) }
-                        TextButton(onClick = { showSettings = !showSettings }, modifier = Modifier.height(34.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) { Text("⚙") }
+                        TextButton(onClick = { settingsSection = "Update"; showSettings = true }, modifier = Modifier.height(34.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) { Text("⚙") }
                     }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -1143,251 +1435,47 @@ private fun RouteCollectorScreen() {
                                 }
                             }
                             Button(onClick = {
+                                // Snapshot the selected speed and type before the async GPS save.
                                 val driveId = activeDriveId
+                                val speedToSave = markerSpeed
+                                val advance = markerType == "Advance sign"
                                 if (driveId != null) scope.launch {
                                     val point = dao.latestPoint(driveId)
                                     if (point != null) {
-                                        val advance = markerType == "Advance sign"
                                         dao.insertMarker(MarkerEntity(
                                             driveId = driveId, timestamp = System.currentTimeMillis(),
                                             latitude = point.latitude, longitude = point.longitude,
                                             kind = if (advance) "speed_advance" else "speed",
-                                            note = (if (advance) "Speed limit $markerSpeed advance sign" else "Speed limit $markerSpeed") + "; bearing=${travelBearing?.roundToInt() ?: -1}"
+                                            note = (if (advance) "Speed limit $speedToSave advance sign" else "Speed limit $speedToSave") + "; bearing=${travelBearing?.roundToInt() ?: -1}"
                                         ))
-                                        if (!advance) {
+                                        if (advance) {
+                                            // The next speed marker will usually start the announced zone.
+                                            markerType = "Zone begins"
+                                        } else {
                                             TrackingState.currentSpeedIsCollected.value = true
-                                            TrackingState.currentPostedSpeed.value = markerSpeed
+                                            TrackingState.currentPostedSpeed.value = speedToSave
                                         }
-                                        speakPrompt(if (advance) "$markerSpeed kilometre advance sign marked" else "$markerSpeed kilometre zone start marked")
+                                        speakPrompt(if (advance) "$speedToSave kilometre advance sign marked" else "$speedToSave kilometre zone start marked")
                                     }
                                 }
                             }) { Text("Set") }
                     }
-                    if (showSettings) {
-                        Text("Settings", style = MaterialTheme.typography.labelMedium)
-                        if (BuildConfig.DEBUG) {
-                            HorizontalDivider()
-                            Text("Comma bridge — SHADOW TEST ONLY", style = MaterialTheme.typography.labelLarge)
-                            Text(
-                                "This sends collected speed limits and a +8 km/h advisory target to a test receiver. " +
-                                    "It cannot change the vehicle's cruise setting, brakes, steering, or openpilot. " +
-                                    "Keep it off unless testing on a trusted network.",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            OutlinedTextField(
-                                value = shadowEndpoint,
-                                onValueChange = { value ->
-                                    shadowEndpoint = value
-                                    shadowEnabled = false
-                                    shadowBlindspotEnabled = false
-                                    shadowPrefs.edit().putString("endpoint", value).putBoolean("enabled", false)
-                                        .putBoolean("blindspot_enabled", false).apply()
-                                    TrackingState.shadowSettingsRevision.value += 1
-                                },
-                                label = { Text("Test receiver URL") },
-                                placeholder = { Text("http://192.168.1.10:8765/v1/advisory") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            OutlinedTextField(
-                                value = shadowToken,
-                                onValueChange = { value ->
-                                    shadowToken = value
-                                    shadowEnabled = false
-                                    shadowBlindspotEnabled = false
-                                    shadowPrefs.edit().putString("token", value).putBoolean("enabled", false)
-                                        .putBoolean("blindspot_enabled", false).apply()
-                                    TrackingState.shadowSettingsRevision.value += 1
-                                },
-                                label = { Text("Shared test token (at least 16 characters)") },
-                                singleLine = true,
-                                visualTransformation = PasswordVisualTransformation(),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("Send live shadow advisories")
-                                Switch(
-                                    checked = shadowEnabled,
-                                    enabled = shadowConfigValid,
-                                    onCheckedChange = { enabled ->
-                                        shadowEnabled = enabled
-                                        shadowPrefs.edit().putBoolean("enabled", enabled).apply()
-                                        TrackingState.shadowSettingsRevision.value += 1
-                                    }
-                                )
-                            }
-                            HorizontalDivider()
-                            Text("Comma → Drive Buddy blind-spot monitor (read-only)",
-                                style = MaterialTheme.typography.labelLarge)
-                            Text("Receives left/right Toyota blind-spot status from the Comma over Wi-Fi. " +
-                                "The phone does not measure the sensors. A missing signal is NOT a clear lane.",
-                                style = MaterialTheme.typography.bodySmall)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("Receive Comma blind-spot status")
-                                Switch(
-                                    checked = shadowBlindspotEnabled,
-                                    enabled = shadowConfigValid,
-                                    onCheckedChange = { enabled ->
-                                        shadowBlindspotEnabled = enabled
-                                        shadowPrefs.edit().putBoolean("blindspot_enabled", enabled).apply()
-                                        TrackingState.shadowSettingsRevision.value += 1
-                                    }
-                                )
-                            }
-                            Text("Blind-spot connection: $shadowBlindspotStatus",
-                                style = MaterialTheme.typography.bodySmall)
-                            Text("Left: " + when (shadowLeftBlindspot) {
-                                true -> "Vehicle detected"
-                                false -> "No detection reported"
-                                null -> "Signal unavailable"
-                            }, style = MaterialTheme.typography.bodySmall)
-                            Text("Right: " + when (shadowRightBlindspot) {
-                                true -> "Vehicle detected"
-                                false -> "No detection reported"
-                                null -> "Signal unavailable"
-                            }, style = MaterialTheme.typography.bodySmall)
-                            HorizontalDivider()
-                            OutlinedButton(
-                                enabled = shadowConfigValid,
-                                onClick = {
-                                    val endpoint = shadowEndpoint.trim()
-                                    val token = shadowToken
-                                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                        val probe = runCatching {
-                                            DriveBuddyShadowClient(endpoint, token).send(
-                                                postedSpeedKph = 60,
-                                                collected = false,
-                                                driveId = 0L,
-                                                manualTest = true
-                                            )
-                                        }
-                                        TrackingState.shadowStatus.value = when {
-                                            probe.getOrNull() == true -> "Test delivered: posted 60, suggested 68 km/h; NOT applied to car"
-                                            probe.isFailure -> "Connection test failed: ${probe.exceptionOrNull()?.javaClass?.simpleName ?: "network error"}"
-                                            else -> "Test receiver rejected the probe"
-                                        }
-                                    }
-                                }
-                            ) { Text("Test connection (no car control)") }
-                            Text("Bridge status: $shadowStatus", style = MaterialTheme.typography.bodySmall)
-                            HorizontalDivider()
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = {
-                                scope.launch {
-                                    restoreStatus = try {
-                                        "Saved " + RouteDataExporter.exportToDownloads(context, dao)
-                                    } catch (e: Exception) {
-                                        "Backup failed: ${e.message ?: "unknown error"}"
-                                    }
-                                }
-                            }) { Text("Backup JSON") }
-                            OutlinedButton(onClick = {
-                                restoreLauncher.launch(arrayOf("application/json", "text/plain"))
-                            }) { Text("Restore JSON") }
-                        }
-                        restoreStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                        Text("Installed: ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.bodySmall)
-                        latestBuildLabel?.let { Text("Latest: $it", style = MaterialTheme.typography.bodySmall) }
-                        latestBuildDuration?.let { Text("Last build duration: $it", style = MaterialTheme.typography.bodySmall) }
-                        if (latestChanges.isNotEmpty()) {
-                            Text("What’s new", style = MaterialTheme.typography.labelLarge)
-                            latestChanges.take(5).forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
-                        }
-                        Text("Update: $updateStatus", style = MaterialTheme.typography.bodySmall)
-                        updateLastCheckedAt?.let { checked ->
-                            Text("Last checked: " + java.text.SimpleDateFormat("h:mm:ss a", Locale.getDefault()).format(Date(checked)) + " • check #$updateCheckCount", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = {
-                                if (!updateBusy) scope.launch { checkLatestUpdate() }
-                            }, enabled = !updateBusy) { Text(if (updateBusy) "Checking..." else "Check now") }
-                            Button(onClick = {
-                                val apkUrl = latestApkUrl
-                                if (apkUrl != null && !updateBusy) scope.launch {
-                                    updateBusy = true; updateStatus = "Downloading..."
-                                    try {
-                                        val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-                                        val apk = File(dir, "routecollector-update.apk")
-                                        val connection = (URL(apkUrl).openConnection() as HttpURLConnection).apply { instanceFollowRedirects = true; connectTimeout = 10000; readTimeout = 30000 }
-                                        connection.inputStream.use { input -> apk.outputStream().use { output -> input.copyTo(output) } }; connection.disconnect()
-                                        val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apk)
-                                        context.startActivity(Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, "application/vnd.android.package-archive"); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK) })
-                                        updateStatus = "Installer opened"
-                                    } catch (_: Exception) { updateStatus = "Download failed - GitHub sign-in may be required" }
-                                    updateBusy = false
-                                }
-                            }, enabled = updateReady && latestApkUrl != null && !updateBusy) { Text("Update") }
-                            updateWebUrl?.let { url ->
-                                Button(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }) { Text("Open latest build") }
-                            }
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Visual alerts")
-                            Switch(checked = visualAlerts, onCheckedChange = { visualAlerts = it; prefs.edit().putBoolean("visual_alerts_enabled", it).apply() })
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Camera warning: $cameraWarning m")
-                            Row {
-                                TextButton(onClick = { cameraWarning = (cameraWarning - 50).coerceAtLeast(100); prefs.edit().putInt("red_light_camera_warning_metres", cameraWarning).apply() }) { Text("−50") }
-                                TextButton(onClick = { cameraWarning = (cameraWarning + 50).coerceAtMost(500); prefs.edit().putInt("red_light_camera_warning_metres", cameraWarning).apply() }) { Text("+50") }
-                            }
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Hard braking: %.2f g".format(Locale.CANADA, hardBrakeThresholdG))
-                            Row {
-                                TextButton(onClick = {
-                                    hardBrakeThresholdG = (hardBrakeThresholdG - 0.05f).coerceAtLeast(0.15f)
-                                    prefs.edit().putFloat("hard_brake_threshold_g", hardBrakeThresholdG).apply()
-                                }) { Text("−") }
-                                TextButton(onClick = {
-                                    hardBrakeThresholdG = (hardBrakeThresholdG + 0.05f).coerceAtMost(0.60f)
-                                    prefs.edit().putFloat("hard_brake_threshold_g", hardBrakeThresholdG).apply()
-                                }) { Text("+") }
-                            }
-                        }
-                        Text("0.30 g is the starting calibration. Compare Drive Buddy events with Ajusto and tune this over time.", style = MaterialTheme.typography.bodySmall)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Speed tolerance: $toleranceSpeed +$toleranceValue")
-                            Row {
-                                TextButton(onClick = {
-                                    toleranceSpeed = if (toleranceSpeed >= 110) 40 else toleranceSpeed + 10
-                                    toleranceValue = prefs.getInt("speed_tolerance_$toleranceSpeed", if (toleranceSpeed >= 100) 9 else 8)
-                                }) { Text("Speed") }
-                                TextButton(onClick = { toleranceValue = (toleranceValue - 1).coerceAtLeast(0); prefs.edit().putInt("speed_tolerance_$toleranceSpeed", toleranceValue).apply() }) { Text("−") }
-                                TextButton(onClick = { toleranceValue = (toleranceValue + 1).coerceAtMost(20); prefs.edit().putInt("speed_tolerance_$toleranceSpeed", toleranceValue).apply() }) { Text("+") }
-                            }
-                        }
-                    }
-                    if (driverAlert?.kind == "red_light_camera_remove_available" && driverAlert?.markerId != null) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Red-light camera here", modifier = Modifier.weight(1f))
-                            TextButton(onClick = { TrackingState.driverAlert.value = null }) { Text("Keep") }
+                    if (recentZones.isNotEmpty() || visibleSpeedReview || visibleActiveReviews.isNotEmpty() || visibleCameraPrompt) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                             TextButton(onClick = {
-                                val markerId = driverAlert?.markerId
-                                if (markerId != null) scope.launch {
-                                    dao.deleteMarker(markerId)
+                                // Same non-destructive acknowledgement as the individual Keep buttons.
+                                val visibleIds = recentZones.map { it.markerId }.toSet()
+                                TrackingState.recentZones.value = TrackingState.recentZones.value.filterNot { it.markerId in visibleIds }
+                                if (visibleSpeedReview) speedReviewDismissed = true
+                                dismissedActiveReviews = dismissedActiveReviews + visibleActiveReviews
+                                if (visibleCameraPrompt && TrackingState.driverAlert.value == driverAlert) {
                                     TrackingState.driverAlert.value = null
-                                    speakPrompt("Camera removed")
                                 }
-                            }) { Text("Remove") }
+                            }) { Text("Keep all") }
                         }
                     }
                     if (recentZones.isNotEmpty()) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Recent zones", style = MaterialTheme.typography.labelMedium)
-                            TextButton(onClick = {
-                                // Only dismiss the on-screen collection history. All saved road facts,
-                                // live speed context, active zones and current alerts remain unchanged.
-                                TrackingState.recentZones.value = emptyList()
-                            }) { Text("Keep all") }
-                        }
+                        Text("Recent zones", style = MaterialTheme.typography.labelMedium)
                         recentZones.forEach { zone ->
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                                 val recentLabel = if (zone.kind == "passing") "Oncoming traffic" else zone.label
@@ -1410,24 +1498,21 @@ private fun RouteCollectorScreen() {
                             }
                         }
                     }
-                    if (postedSpeed != null || activeZones.isNotEmpty() || activeRoadAlerts.isNotEmpty()) {
+                    if (visibleSpeedReview || visibleActiveReviews.isNotEmpty()) {
                         Text("Active zones", style = MaterialTheme.typography.labelMedium)
-                        if (postedSpeed != null) {
+                        if (visibleSpeedReview) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Speed: ${postedSpeed} km/h", modifier = Modifier.weight(1f))
                                 TextButton(onClick = {
-                                    context.startService(Intent(context, DriveTrackingService::class.java).apply {
-                                        action = DriveTrackingService.ACTION_CLEAR_SPEED_ZONE
-                                    })
+                                    speedReviewDismissed = true
                                 }) { Text("Keep") }
                             }
                         }
-                        if ("community" in activeZones) {
+                        if ("community" in visibleActiveReviews) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Community safety", modifier = Modifier.weight(1f))
                                 TextButton(onClick = {
-                                    TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"
-                                    speakPrompt("Community safety zone kept")
+                                    keepActiveReview("community")
                                 }) { Text("Keep") }
                                 TextButton(onClick = {
                                     scope.launch {
@@ -1438,12 +1523,11 @@ private fun RouteCollectorScreen() {
                                 }) { Text("Delete") }
                             }
                         }
-                        if ("senior" in activeZones) {
+                        if ("senior" in visibleActiveReviews) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Senior safety", modifier = Modifier.weight(1f))
                                 TextButton(onClick = {
-                                    TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"
-                                    speakPrompt("Senior safety zone kept")
+                                    keepActiveReview("senior")
                                 }) { Text("Keep") }
                                 TextButton(onClick = {
                                     scope.launch {
@@ -1454,9 +1538,10 @@ private fun RouteCollectorScreen() {
                                 }) { Text("Delete") }
                             }
                         }
-                        if ("camera" in activeRoadAlerts) {
+                        if ("camera" in visibleActiveReviews) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Red-light camera", modifier = Modifier.weight(1f))
+                                TextButton(onClick = { keepActiveReview("camera") }) { Text("Keep") }
                                 TextButton(onClick = {
                                     scope.launch {
                                         val lat = TrackingState.latestLat.value
@@ -1470,15 +1555,14 @@ private fun RouteCollectorScreen() {
                                         TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "camera"
                                         speakPrompt(if (nearest != null) "Red light camera removed" else "Camera alert cleared")
                                     }
-                                }) { Text("Remove") }
+                                }) { Text("Delete") }
                             }
                         }
-                        if ("deer" in activeRoadAlerts) {
+                        if ("deer" in visibleActiveReviews) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Deer crossing area", modifier = Modifier.weight(1f))
                                 TextButton(onClick = {
-                                    TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
-                                    speakPrompt("Deer zone cleared")
+                                    keepActiveReview("deer")
                                 }) { Text("Keep") }
                                 TextButton(onClick = {
                                     scope.launch {
@@ -1493,7 +1577,25 @@ private fun RouteCollectorScreen() {
                                 }) { Text("Delete") }
                             }
                         }
+
                     }
+                    if (visibleCameraPrompt) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Red-light camera here", modifier = Modifier.weight(1f))
+                            TextButton(onClick = { TrackingState.driverAlert.value = null; keepActiveReview("camera") }) { Text("Keep") }
+                            TextButton(onClick = {
+                                val markerId = driverAlert?.markerId
+                                if (markerId != null) scope.launch {
+                                    dao.deleteMarker(markerId)
+                                    TrackingState.driverAlert.value = null
+                                    keepActiveReview("camera")
+                                    speakPrompt("Camera deleted")
+                                }
+                            }) { Text("Delete") }
+                        }
+                    }
+
+
 
                 }
             }

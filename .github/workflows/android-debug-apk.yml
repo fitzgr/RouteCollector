@@ -5,12 +5,19 @@ on:
   push:
     branches:
       - main
-      - feature/google-maps-overlay
+
+# Serialize releases so older jobs cannot overwrite newer phone updates.
+concurrency:
+  group: routecollector-latest-debug
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
 jobs:
   build-debug-apk:
+    # Manual dispatch from a feature branch must not replace the phone release.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:

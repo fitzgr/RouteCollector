@@ -496,6 +496,20 @@ private fun RouteCollectorScreen() {
     val walkingCountdown by TrackingState.walkingAutoStopSeconds.collectAsStateWithLifecycle()
     val driverAlert by TrackingState.driverAlert.collectAsStateWithLifecycle()
     val recentZones by TrackingState.recentZones.collectAsStateWithLifecycle()
+    // Acknowledging a review must not reset navigation or the road-zone tracker.
+    var dismissedActiveReviews by remember(activeDriveId) { mutableStateOf(emptySet<String>()) }
+    var speedReviewDismissed by remember(activeDriveId, postedSpeed) { mutableStateOf(false) }
+    val activeReviewKinds = activeZones.intersect(setOf("community", "senior", "passing")) +
+        activeRoadAlerts.intersect(setOf("camera", "deer", "pedestrian", "passing"))
+    LaunchedEffect(activeReviewKinds) {
+        dismissedActiveReviews = dismissedActiveReviews.intersect(activeReviewKinds)
+    }
+    val visibleActiveReviews = activeReviewKinds - dismissedActiveReviews
+    val visibleSpeedReview = postedSpeed != null && !speedReviewDismissed
+    val visibleCameraPrompt = driverAlert?.kind == "red_light_camera_remove_available" && driverAlert?.markerId != null
+    fun keepActiveReview(kind: String) {
+        dismissedActiveReviews = dismissedActiveReviews + kind
+    }
     val hardBrakeActive by TrackingState.hardBrakeActive.collectAsStateWithLifecycle()
     val hardBrakeG by TrackingState.hardBrakeG.collectAsStateWithLifecycle()
     val hardBrakeCount by TrackingState.hardBrakeCount.collectAsStateWithLifecycle()
@@ -1172,6 +1186,151 @@ private fun RouteCollectorScreen() {
                                 }
                             }) { Text("Set") }
                     }
+                    if (recentZones.isNotEmpty() || visibleSpeedReview || visibleActiveReviews.isNotEmpty() || visibleCameraPrompt) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = {
+                                // Same non-destructive acknowledgement as the individual Keep buttons.
+                                val visibleIds = recentZones.map { it.markerId }.toSet()
+                                TrackingState.recentZones.value = TrackingState.recentZones.value.filterNot { it.markerId in visibleIds }
+                                if (visibleSpeedReview) speedReviewDismissed = true
+                                dismissedActiveReviews = dismissedActiveReviews + visibleActiveReviews
+                                if (visibleCameraPrompt && TrackingState.driverAlert.value == driverAlert) {
+                                    TrackingState.driverAlert.value = null
+                                }
+                            }) { Text("Keep all") }
+                        }
+                    }
+                    if (recentZones.isNotEmpty()) {
+                        Text("Recent zones", style = MaterialTheme.typography.labelMedium)
+                        recentZones.forEach { zone ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                val recentLabel = if (zone.kind == "passing") "Oncoming traffic" else zone.label
+                                Text(recentLabel, modifier = Modifier.weight(1f), maxLines = 1)
+                                TextButton(onClick = { TrackingState.dismissRecentZone(zone.markerId) }) { Text("Keep") }
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        val facts = dao.getSpokenRoadFacts()
+                                        val targets = if (zone.pairId != null) facts.filter { pairId(it.note) == zone.pairId } else facts.filter { it.id == zone.markerId }
+                                        targets.forEach { dao.deleteMarker(it.id) }
+                                        TrackingState.dismissRecentZone(zone.markerId)
+                                        when (zone.kind) {
+                                            "community", "senior", "passing" -> TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - zone.kind
+                                            "deer" -> TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
+                                            "speed" -> context.startService(Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_CLEAR_SPEED_ZONE })
+                                        }
+                                        speakPrompt(if (targets.isNotEmpty()) "$recentLabel deleted" else "Zone already removed")
+                                    }
+                                }) { Text("Delete") }
+                            }
+                        }
+                    }
+                    if (visibleSpeedReview || visibleActiveReviews.isNotEmpty()) {
+                        Text("Active zones", style = MaterialTheme.typography.labelMedium)
+                        if (visibleSpeedReview) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Speed: ${postedSpeed} km/h", modifier = Modifier.weight(1f))
+                                TextButton(onClick = {
+                                    speedReviewDismissed = true
+                                }) { Text("Keep") }
+                            }
+                        }
+                        if ("community" in visibleActiveReviews) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Community safety", modifier = Modifier.weight(1f))
+                                TextButton(onClick = {
+                                    keepActiveReview("community")
+                                }) { Text("Keep") }
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        val deleted = deleteNearestZonePair("community")
+                                        TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"
+                                        speakPrompt(if (deleted) "Community safety zone deleted" else "No community safety zone found")
+                                    }
+                                }) { Text("Delete") }
+                            }
+                        }
+                        if ("senior" in visibleActiveReviews) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Senior safety", modifier = Modifier.weight(1f))
+                                TextButton(onClick = {
+                                    keepActiveReview("senior")
+                                }) { Text("Keep") }
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        val deleted = deleteNearestZonePair("senior")
+                                        TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"
+                                        speakPrompt(if (deleted) "Senior safety zone deleted" else "No senior safety zone found")
+                                    }
+                                }) { Text("Delete") }
+                            }
+                        }
+                        if ("camera" in visibleActiveReviews) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Red-light camera", modifier = Modifier.weight(1f))
+                                TextButton(onClick = { keepActiveReview("camera") }) { Text("Keep") }
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        val lat = TrackingState.latestLat.value
+                                        val lon = TrackingState.latestLon.value
+                                        val nearest = if (lat != null && lon != null) dao.getSpokenRoadFacts()
+                                            .filter { it.kind == "camera" || it.kind == "red_light_camera" }
+                                            .minByOrNull { marker ->
+                                                FloatArray(1).also { android.location.Location.distanceBetween(lat, lon, marker.latitude, marker.longitude, it) }[0]
+                                            } else null
+                                        if (nearest != null) dao.deleteMarker(nearest.id)
+                                        TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "camera"
+                                        speakPrompt(if (nearest != null) "Red light camera removed" else "Camera alert cleared")
+                                    }
+                                }) { Text("Delete") }
+                            }
+                        }
+                        if ("deer" in visibleActiveReviews) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Deer crossing area", modifier = Modifier.weight(1f))
+                                TextButton(onClick = {
+                                    keepActiveReview("deer")
+                                }) { Text("Keep") }
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        val lat = TrackingState.latestLat.value
+                                        val lon = TrackingState.latestLon.value
+                                        val deer = dao.getDeerZoneMarkers()
+                                        deerDeleteTarget = if (lat != null && lon != null) deer.minByOrNull { marker ->
+                                            FloatArray(1).also { android.location.Location.distanceBetween(lat, lon, marker.latitude, marker.longitude, it) }[0]
+                                        } else null
+                                        if (deerDeleteTarget == null) speakPrompt("No deer zone found")
+                                    }
+                                }) { Text("Delete") }
+                            }
+                        }
+                        if ("passing" in visibleActiveReviews) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Oncoming traffic", modifier = Modifier.weight(1f))
+                                TextButton(onClick = { keepActiveReview("passing") }) { Text("Keep") }
+                            }
+                        }
+                        if ("pedestrian" in visibleActiveReviews) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Pedestrian crossing", modifier = Modifier.weight(1f))
+                                TextButton(onClick = { keepActiveReview("pedestrian") }) { Text("Keep") }
+                            }
+                        }
+                    }
+                    if (visibleCameraPrompt) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Red-light camera here", modifier = Modifier.weight(1f))
+                            TextButton(onClick = { TrackingState.driverAlert.value = null; keepActiveReview("camera") }) { Text("Keep") }
+                            TextButton(onClick = {
+                                val markerId = driverAlert?.markerId
+                                if (markerId != null) scope.launch {
+                                    dao.deleteMarker(markerId)
+                                    TrackingState.driverAlert.value = null
+                                    keepActiveReview("camera")
+                                    speakPrompt("Camera deleted")
+                                }
+                            }) { Text("Delete") }
+                        }
+                    }
                     if (showSettings) {
                         Text("Settings", style = MaterialTheme.typography.labelMedium)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1270,147 +1429,7 @@ private fun RouteCollectorScreen() {
                             }
                         }
                     }
-                    if (driverAlert?.kind == "red_light_camera_remove_available" && driverAlert?.markerId != null) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Red-light camera here", modifier = Modifier.weight(1f))
-                            TextButton(onClick = { TrackingState.driverAlert.value = null }) { Text("Keep") }
-                            TextButton(onClick = {
-                                val markerId = driverAlert?.markerId
-                                if (markerId != null) scope.launch {
-                                    dao.deleteMarker(markerId)
-                                    TrackingState.driverAlert.value = null
-                                    speakPrompt("Camera removed")
-                                }
-                            }) { Text("Remove") }
-                        }
-                    }
-                    if (recentZones.isNotEmpty() || postedSpeed != null || activeZones.isNotEmpty() || "deer" in activeRoadAlerts) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            TextButton(onClick = {
-                                // Apply the non-destructive Keep action to all visible Recent and
-                                // Active Zone entries. Never delete persisted road facts or GPS points.
-                                TrackingState.recentZones.value = emptyList()
-                                if (postedSpeed != null) {
-                                    context.startService(Intent(context, DriveTrackingService::class.java).apply {
-                                        action = DriveTrackingService.ACTION_CLEAR_SPEED_ZONE
-                                    })
-                                }
-                                TrackingState.activeZoneKinds.value =
-                                    TrackingState.activeZoneKinds.value - setOf("community", "senior")
-                                if ("deer" in activeRoadAlerts) {
-                                    TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
-                                }
-                            }) { Text("Keep all") }
-                        }
-                    }
-                    if (recentZones.isNotEmpty()) {
-                        Text("Recent zones", style = MaterialTheme.typography.labelMedium)
-                        recentZones.forEach { zone ->
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                val recentLabel = if (zone.kind == "passing") "Oncoming traffic" else zone.label
-                                Text(recentLabel, modifier = Modifier.weight(1f), maxLines = 1)
-                                TextButton(onClick = { TrackingState.dismissRecentZone(zone.markerId) }) { Text("Keep") }
-                                TextButton(onClick = {
-                                    scope.launch {
-                                        val facts = dao.getSpokenRoadFacts()
-                                        val targets = if (zone.pairId != null) facts.filter { pairId(it.note) == zone.pairId } else facts.filter { it.id == zone.markerId }
-                                        targets.forEach { dao.deleteMarker(it.id) }
-                                        TrackingState.dismissRecentZone(zone.markerId)
-                                        when (zone.kind) {
-                                            "community", "senior", "passing" -> TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - zone.kind
-                                            "deer" -> TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
-                                            "speed" -> context.startService(Intent(context, DriveTrackingService::class.java).apply { action = DriveTrackingService.ACTION_CLEAR_SPEED_ZONE })
-                                        }
-                                        speakPrompt(if (targets.isNotEmpty()) "$recentLabel deleted" else "Zone already removed")
-                                    }
-                                }) { Text("Delete") }
-                            }
-                        }
-                    }
-                    if (postedSpeed != null || activeZones.isNotEmpty() || activeRoadAlerts.isNotEmpty()) {
-                        Text("Active zones", style = MaterialTheme.typography.labelMedium)
-                        if (postedSpeed != null) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Speed: ${postedSpeed} km/h", modifier = Modifier.weight(1f))
-                                TextButton(onClick = {
-                                    context.startService(Intent(context, DriveTrackingService::class.java).apply {
-                                        action = DriveTrackingService.ACTION_CLEAR_SPEED_ZONE
-                                    })
-                                }) { Text("Keep") }
-                            }
-                        }
-                        if ("community" in activeZones) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Community safety", modifier = Modifier.weight(1f))
-                                TextButton(onClick = {
-                                    TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"
-                                    speakPrompt("Community safety zone kept")
-                                }) { Text("Keep") }
-                                TextButton(onClick = {
-                                    scope.launch {
-                                        val deleted = deleteNearestZonePair("community")
-                                        TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "community"
-                                        speakPrompt(if (deleted) "Community safety zone deleted" else "No community safety zone found")
-                                    }
-                                }) { Text("Delete") }
-                            }
-                        }
-                        if ("senior" in activeZones) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Senior safety", modifier = Modifier.weight(1f))
-                                TextButton(onClick = {
-                                    TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"
-                                    speakPrompt("Senior safety zone kept")
-                                }) { Text("Keep") }
-                                TextButton(onClick = {
-                                    scope.launch {
-                                        val deleted = deleteNearestZonePair("senior")
-                                        TrackingState.activeZoneKinds.value = TrackingState.activeZoneKinds.value - "senior"
-                                        speakPrompt(if (deleted) "Senior safety zone deleted" else "No senior safety zone found")
-                                    }
-                                }) { Text("Delete") }
-                            }
-                        }
-                        if ("camera" in activeRoadAlerts) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Red-light camera", modifier = Modifier.weight(1f))
-                                TextButton(onClick = {
-                                    scope.launch {
-                                        val lat = TrackingState.latestLat.value
-                                        val lon = TrackingState.latestLon.value
-                                        val nearest = if (lat != null && lon != null) dao.getSpokenRoadFacts()
-                                            .filter { it.kind == "camera" || it.kind == "red_light_camera" }
-                                            .minByOrNull { marker ->
-                                                FloatArray(1).also { android.location.Location.distanceBetween(lat, lon, marker.latitude, marker.longitude, it) }[0]
-                                            } else null
-                                        if (nearest != null) dao.deleteMarker(nearest.id)
-                                        TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "camera"
-                                        speakPrompt(if (nearest != null) "Red light camera removed" else "Camera alert cleared")
-                                    }
-                                }) { Text("Remove") }
-                            }
-                        }
-                        if ("deer" in activeRoadAlerts) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Deer crossing area", modifier = Modifier.weight(1f))
-                                TextButton(onClick = {
-                                    TrackingState.activeRoadAlerts.value = TrackingState.activeRoadAlerts.value - "deer"
-                                    speakPrompt("Deer zone cleared")
-                                }) { Text("Keep") }
-                                TextButton(onClick = {
-                                    scope.launch {
-                                        val lat = TrackingState.latestLat.value
-                                        val lon = TrackingState.latestLon.value
-                                        val deer = dao.getDeerZoneMarkers()
-                                        deerDeleteTarget = if (lat != null && lon != null) deer.minByOrNull { marker ->
-                                            FloatArray(1).also { android.location.Location.distanceBetween(lat, lon, marker.latitude, marker.longitude, it) }[0]
-                                        } else null
-                                        if (deerDeleteTarget == null) speakPrompt("No deer zone found")
-                                    }
-                                }) { Text("Delete") }
-                            }
-                        }
-                    }
+
 
                 }
             }

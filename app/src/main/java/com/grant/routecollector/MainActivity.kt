@@ -499,8 +499,8 @@ private fun RouteCollectorScreen() {
     // Acknowledging a review must not reset navigation or the road-zone tracker.
     var dismissedActiveReviews by remember(activeDriveId) { mutableStateOf(emptySet<String>()) }
     var speedReviewDismissed by remember(activeDriveId, postedSpeed) { mutableStateOf(false) }
-    val activeReviewKinds = activeZones.intersect(setOf("community", "senior", "passing")) +
-        activeRoadAlerts.intersect(setOf("camera", "deer", "pedestrian", "passing"))
+    val activeReviewKinds = activeZones.intersect(setOf("community", "senior")) +
+        activeRoadAlerts.intersect(setOf("camera", "deer"))
     LaunchedEffect(activeReviewKinds) {
         dismissedActiveReviews = dismissedActiveReviews.intersect(activeReviewKinds)
     }
@@ -1303,18 +1303,7 @@ private fun RouteCollectorScreen() {
                                 }) { Text("Delete") }
                             }
                         }
-                        if ("passing" in visibleActiveReviews) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Oncoming traffic", modifier = Modifier.weight(1f))
-                                TextButton(onClick = { keepActiveReview("passing") }) { Text("Keep") }
-                            }
-                        }
-                        if ("pedestrian" in visibleActiveReviews) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Pedestrian crossing", modifier = Modifier.weight(1f))
-                                TextButton(onClick = { keepActiveReview("pedestrian") }) { Text("Keep") }
-                            }
-                        }
+
                     }
                     if (visibleCameraPrompt) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

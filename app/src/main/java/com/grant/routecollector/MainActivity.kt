@@ -505,6 +505,7 @@ private fun RouteCollectorScreen() {
         shadowToken.length >= 16 && shadowEndpoint.trim().endsWith("/v1/advisory")
     var blindspotProbeBusy by remember { mutableStateOf(false) }
     var speedTestBusy by remember { mutableStateOf(false) }
+    var speedTestResult by remember(shadowEndpoint, shadowToken) { mutableStateOf("Not tested") }
     var blindspotProbeResult by remember { mutableStateOf<String?>(null) }
     val liveBlindspotMonitoring = activeDriveId != null && shadowBlindspotEnabled && shadowConfigValid
     val liveBlindspotStatus = when {
@@ -974,7 +975,7 @@ private fun RouteCollectorScreen() {
     if (showSettings) {
         Dialog(
             onDismissRequest = { showSettings = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
         ) {
             Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 Column(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1155,6 +1156,49 @@ private fun RouteCollectorScreen() {
                                 )
                             }
                             HorizontalDivider()
+                            Text("Live bridge status: $shadowStatus", style = MaterialTheme.typography.bodySmall)
+                            Text("Test speed marker — parked only", style = MaterialTheme.typography.labelLarge)
+                            Text("Stop recording, switch live advisories off and park before testing. These messages are diagnostic only; no marker is saved and no vehicle control is applied.",
+                                style = MaterialTheme.typography.bodySmall)
+                            Text("Speed test: ${if (speedTestBusy) "Sending…" else speedTestResult}", style = MaterialTheme.typography.bodyMedium)
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                for (testSpeed in listOf(60, 80, 50)) {
+                                    OutlinedButton(
+                                        enabled = shadowConfigValid && activeDriveId == null && !shadowEnabled && !speedTestBusy,
+                                        onClick = {
+                                            val endpoint = shadowEndpoint.trim()
+                                            val token = shadowToken
+                                            speedTestBusy = true
+                                            speedTestResult = "Sending $testSpeed km/h…"
+                                            scope.launch {
+                                                try {
+                                                    val probe = withContext(Dispatchers.IO) {
+                                                        runCatching {
+                                                            DriveBuddyShadowClient(endpoint, token).send(
+                                                                postedSpeedKph = testSpeed,
+                                                                collected = false,
+                                                                driveId = 0L,
+                                                                manualTest = true
+                                                            )
+                                                        }
+                                                    }
+                                                    if (shadowEndpoint.trim() == endpoint && shadowToken == token) {
+                                                        speedTestResult = when {
+                                                            probe.getOrNull() == true -> "Test delivered: posted ${testSpeed}, suggested ${testSpeed + DriveBuddyShadowClient.SPEED_OFFSET_KPH} km/h; NOT applied to car"
+                                                            probe.isFailure -> "Connection test failed: ${probe.exceptionOrNull()?.javaClass?.simpleName ?: "network error"}"
+                                                            else -> "Test receiver rejected the probe"
+                                                        }
+                                                    }
+                                                } finally {
+                                                    speedTestBusy = false
+                                                }
+                                            }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 10.dp)
+                                    ) { Text("${testSpeed} km/h") }
+                                }
+                            }
+                            HorizontalDivider()
                             Text("Comma → Drive Buddy blind-spot monitor (read-only)",
                                 style = MaterialTheme.typography.labelLarge)
                             Text("Receives left/right Toyota blind-spot status from the Comma over Wi-Fi. " +
@@ -1216,47 +1260,7 @@ private fun RouteCollectorScreen() {
                             ) { Text(if (blindspotProbeBusy) "Reading snapshot…" else "Test blind-spot connection (read-only)") }
                             blindspotProbeResult?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                             HorizontalDivider()
-                            Text("Test speed marker — parked only", style = MaterialTheme.typography.labelLarge)
-                            Text("Stop recording, switch live advisories off and park before testing. These messages are diagnostic only; no marker is saved and no vehicle control is applied.",
-                                style = MaterialTheme.typography.bodySmall)
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                for (testSpeed in listOf(60, 80, 50)) {
-                                    OutlinedButton(
-                                        enabled = shadowConfigValid && activeDriveId == null && !shadowEnabled && !speedTestBusy,
-                                        onClick = {
-                                            val endpoint = shadowEndpoint.trim()
-                                            val token = shadowToken
-                                            speedTestBusy = true
-                                            scope.launch {
-                                                try {
-                                                    val probe = withContext(Dispatchers.IO) {
-                                                        runCatching {
-                                                            DriveBuddyShadowClient(endpoint, token).send(
-                                                                postedSpeedKph = testSpeed,
-                                                                collected = false,
-                                                                driveId = 0L,
-                                                                manualTest = true
-                                                            )
-                                                        }
-                                                    }
-                                                    if (shadowEndpoint.trim() == endpoint && shadowToken == token) {
-                                                        TrackingState.shadowStatus.value = when {
-                                                            probe.getOrNull() == true -> "Test delivered: posted ${testSpeed}, suggested ${testSpeed + DriveBuddyShadowClient.SPEED_OFFSET_KPH} km/h; NOT applied to car"
-                                                            probe.isFailure -> "Connection test failed: ${probe.exceptionOrNull()?.javaClass?.simpleName ?: "network error"}"
-                                                            else -> "Test receiver rejected the probe"
-                                                        }
-                                                    }
-                                                } finally {
-                                                    speedTestBusy = false
-                                                }
-                                            }
-                                        },
-                                        contentPadding = PaddingValues(horizontal = 10.dp)
-                                    ) { Text("${testSpeed} km/h") }
-                                }
-                            }
-                            Text("Bridge status: $shadowStatus", style = MaterialTheme.typography.bodySmall)
-                            HorizontalDivider()
+                            Spacer(Modifier.height(32.dp))
                         }
                                 }
                             }

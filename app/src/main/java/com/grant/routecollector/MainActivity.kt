@@ -501,8 +501,22 @@ private fun RouteCollectorScreen() {
     val shadowLeftBlindspot by TrackingState.shadowLeftBlindspot.collectAsStateWithLifecycle()
     val shadowRightBlindspot by TrackingState.shadowRightBlindspot.collectAsStateWithLifecycle()
     val shadowBlindspotStatus by TrackingState.shadowBlindspotStatus.collectAsStateWithLifecycle()
-    val shadowConfigValid = (shadowEndpoint.startsWith("https://") || shadowEndpoint.startsWith("http://")) &&
-        shadowToken.length >= 16 && shadowEndpoint.contains("/v1/advisory")
+    val shadowConfigValid = (shadowEndpoint.trim().startsWith("https://") || shadowEndpoint.trim().startsWith("http://")) &&
+        shadowToken.length >= 16 && shadowEndpoint.trim().endsWith("/v1/advisory")
+    var blindspotProbeBusy by remember { mutableStateOf(false) }
+    var blindspotProbeResult by remember { mutableStateOf<String?>(null) }
+    val liveBlindspotMonitoring = activeDriveId != null && shadowBlindspotEnabled && shadowConfigValid
+    val liveBlindspotStatus = when {
+        !shadowBlindspotEnabled -> "Off"
+        !shadowConfigValid -> "Signal unavailable — receiver not configured"
+        activeDriveId == null -> "Not monitoring — no recording; use read-only test"
+        else -> shadowBlindspotStatus
+    }
+    val liveBlindspotData = liveBlindspotMonitoring &&
+        shadowBlindspotStatus == "Receiving Comma blind-spot telemetry"
+    LaunchedEffect(shadowEndpoint, shadowToken, showSettings, settingsSection) {
+        blindspotProbeResult = null
+    }
     var visualAlerts by remember { mutableStateOf(prefs.getBoolean("visual_alerts_enabled", true)) }
     var cameraWarning by remember { mutableIntStateOf(prefs.getInt("red_light_camera_warning_metres", 200)) }
     var toleranceSpeed by remember { mutableIntStateOf(60) }
@@ -1160,18 +1174,46 @@ private fun RouteCollectorScreen() {
                                     }
                                 )
                             }
-                            Text("Blind-spot connection: $shadowBlindspotStatus",
+                            Text("Blind-spot connection: $liveBlindspotStatus",
                                 style = MaterialTheme.typography.bodySmall)
-                            Text("Left: " + when (shadowLeftBlindspot) {
+                            Text("Left: " + when (if (liveBlindspotData) shadowLeftBlindspot else null) {
                                 true -> "Vehicle detected"
                                 false -> "No detection reported"
                                 null -> "Signal unavailable"
                             }, style = MaterialTheme.typography.bodySmall)
-                            Text("Right: " + when (shadowRightBlindspot) {
+                            Text("Right: " + when (if (liveBlindspotData) shadowRightBlindspot else null) {
                                 true -> "Vehicle detected"
                                 false -> "No detection reported"
                                 null -> "Signal unavailable"
                             }, style = MaterialTheme.typography.bodySmall)
+                            Text("Parked test: reads one snapshot without starting a recording or sending an advisory. A result is not live monitoring.",
+                                style = MaterialTheme.typography.bodySmall)
+                            OutlinedButton(
+                                enabled = shadowConfigValid && !blindspotProbeBusy,
+                                onClick = {
+                                    val endpoint = shadowEndpoint.trim()
+                                    val token = shadowToken
+                                    blindspotProbeBusy = true
+                                    blindspotProbeResult = null
+                                    scope.launch {
+                                        try {
+                                            val result = withContext(Dispatchers.IO) {
+                                                runCatching { DriveBuddyShadowClient(endpoint, token).readBlindspots() }
+                                            }
+                                            if (shadowEndpoint.trim() == endpoint && shadowToken == token && showSettings && settingsSection == "Comma") {
+                                                blindspotProbeResult = when {
+                                                    result.isFailure -> "Snapshot failed: " + (result.exceptionOrNull()?.javaClass?.simpleName ?: "network error")
+                                                    result.getOrNull() == null -> "Snapshot unavailable — receiver rejected request, or data missing/stale"
+                                                    else -> "Snapshot received: valid telemetry response (not live monitoring)"
+                                                }
+                                            }
+                                        } finally {
+                                            blindspotProbeBusy = false
+                                        }
+                                    }
+                                }
+                            ) { Text(if (blindspotProbeBusy) "Reading snapshot…" else "Test blind-spot connection (read-only)") }
+                            blindspotProbeResult?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                             HorizontalDivider()
                             OutlinedButton(
                                 enabled = shadowConfigValid,
@@ -1256,6 +1298,19 @@ private fun RouteCollectorScreen() {
                         }, enabled = activeDriveId != null, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
                             Text("↶ Undo", style = MaterialTheme.typography.bodySmall)
                         }
+                    }
+                    if (BuildConfig.DEBUG && (shadowEndpoint.isNotBlank() || shadowBlindspotEnabled || shadowEnabled)) {
+                        Text(
+                            when {
+                                !shadowConfigValid -> "Comma test • not configured"
+                                !shadowBlindspotEnabled -> "Comma test • monitoring off"
+                                activeDriveId == null -> "Comma test • not monitoring"
+                                liveBlindspotData -> "Comma test • receiving telemetry"
+                                else -> "Comma test • signal unavailable"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     walkingCountdown?.let { Text("No GPS movement • auto-stop in ${it}s", style = MaterialTheme.typography.bodySmall, color = Color(0xFFB26A00)) }
                     if (activeDriveId != null) {

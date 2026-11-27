@@ -26,6 +26,8 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import com.google.android.gms.location.*
 import com.grant.routecollector.MainActivity
+import com.grant.routecollector.BuildConfig
+import com.grant.routecollector.integration.DriveBuddyShadowClient
 import com.grant.routecollector.data.*
 import com.grant.routecollector.map.RoadSpeedResolver
 import kotlinx.coroutines.CoroutineScope
@@ -33,10 +35,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collect
 import java.util.Locale
 import kotlin.math.abs
 
 class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEventListener {
+    private data class ShadowSnapshot(val driveId: Long?, val speed: Int?, val collected: Boolean, val revision: Int)
     companion object {
         const val ACTION_START = "routecollector.START"
         const val ACTION_STOP = "routecollector.STOP"
@@ -108,7 +116,19 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
     private val activeZoneEntryBearings = mutableMapOf<String, Float>()
     private var musicPausedForPrompt = false
     private val pendingSpeech = mutableListOf<String>()
-    private var speechInProgress = 0
+    // All speech and media state is owned by the main looper.
+    private val outstandingSpeech = mutableSetOf<String>()
+    private var nextSpeechId = 0L
+    private var speechInitFailed = false
+    private var speechDestroyed = false
+    private val speechWatchdog = Runnable {
+        if (outstandingSpeech.isNotEmpty()) {
+            Log.w("RouteCollectorSpeech", "Speech callback timed out; restoring media")
+            outstandingSpeech.clear()
+            tts?.stop()
+            restoreInterruptedMusic()
+        }
+    }
     private var latestLinearAcceleration = 0f
     private var previousSpeedMps: Float? = null
     private var previousSpeedTimeMillis: Long? = null
@@ -138,6 +158,10 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
         }
         tts = TextToSpeech(this, this)
         createChannel()
+        if (BuildConfig.DEBUG) {
+            startShadowAdvisoryTransport()
+            startBlindspotTelemetryReadOnly()
+        }
     }
 
     override fun onSensorChanged(event: SensorEvent) {
@@ -192,7 +216,32 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
             dao.insertMarker(MarkerEntity(id = 0, driveId = id, timestamp = System.currentTimeMillis(), latitude = lat, longitude = lon, kind = "hard_brake", note = note))
         }
     }
-    override fun onInit(status: Int) { if (status == TextToSpeech.SUCCESS) { tts?.language = Locale.CANADA; tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() { override fun onStart(utteranceId: String?) = Unit; override fun onError(utteranceId: String?) { resumeMusicAfterPrompt() }; override fun onDone(utteranceId: String?) { resumeMusicAfterPrompt() } }); ttsReady = true; val queued = pendingSpeech.toList(); pendingSpeech.clear(); queued.forEach { speak(it) } } }
+    override fun onInit(status: Int) {
+        mainHandler.post {
+            if (speechDestroyed) return@post
+            val engine = tts
+            if (status != TextToSpeech.SUCCESS || engine == null) {
+                speechInitFailed = true
+                pendingSpeech.clear()
+                return@post
+            }
+            engine.language = Locale.CANADA
+            engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {
+                    mainHandler.post {
+                        if (utteranceId in outstandingSpeech) armSpeechWatchdog()
+                    }
+                }
+                override fun onError(utteranceId: String?) = finishSpeech(utteranceId)
+                override fun onDone(utteranceId: String?) = finishSpeech(utteranceId)
+                override fun onStop(utteranceId: String?, interrupted: Boolean) = finishSpeech(utteranceId)
+            })
+            ttsReady = true
+            val queued = pendingSpeech.toList()
+            pendingSpeech.clear()
+            queued.forEach { enqueueSpeech(it) }
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -210,6 +259,91 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
             ACTION_STOP -> stopTracking()
         }
         return START_NOT_STICKY
+    }
+
+    /**
+     * Optional development test only. Observes existing posted-speed state; never
+     * changes cruise control, openpilot, CAN frames, braking or steering.
+     * Does not run at all in release builds, or send unless explicitly enabled.
+     */
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    private fun startShadowAdvisoryTransport() {
+        scope.launch {
+            combine(
+                TrackingState.activeDriveId,
+                TrackingState.currentPostedSpeed,
+                TrackingState.currentSpeedIsCollected,
+                TrackingState.shadowSettingsRevision
+            ) { id, speed, collected, revision ->
+                ShadowSnapshot(id, speed, collected, revision)
+            }.debounce(300L).distinctUntilChanged().collect { snapshot ->
+                val prefs = getSharedPreferences("drivebuddy_shadow", MODE_PRIVATE)
+                if (!prefs.getBoolean("enabled", false)) {
+                    TrackingState.shadowStatus.value = "Off"
+                    return@collect
+                }
+                if (snapshot.driveId == null || snapshot.speed == null || !snapshot.collected) {
+                    TrackingState.shadowStatus.value = "On: waiting for a captured speed-zone marker"
+                    return@collect
+                }
+                val endpoint = prefs.getString("endpoint", "")?.trim().orEmpty()
+                val token = prefs.getString("token", "").orEmpty()
+                if (!(endpoint.startsWith("http://") || endpoint.startsWith("https://")) ||
+                    token.length < 16 || snapshot.speed !in 20..130) {
+                    TrackingState.shadowStatus.value = "Invalid receiver settings or speed"
+                    return@collect
+                }
+                val result = runCatching {
+                    DriveBuddyShadowClient(endpoint, token).send(
+                        postedSpeedKph = snapshot.speed,
+                        collected = snapshot.collected,
+                        driveId = snapshot.driveId,
+                    )
+                }
+                TrackingState.shadowStatus.value = when {
+                    result.getOrNull() == true -> "Delivered posted ${snapshot.speed} → suggested ${snapshot.speed + DriveBuddyShadowClient.SPEED_OFFSET_KPH} km/h (shadow only)"
+                    result.isFailure -> "Shadow receiver unavailable: ${result.exceptionOrNull()?.javaClass?.simpleName ?: "network error"}"
+                    else -> "Shadow receiver rejected advisory"
+                }
+            }
+        }
+    }
+
+    /**
+     * Read-only Comma -> Android blind-spot telemetry. Independently enabled from
+     * the Android -> Comma speed advisory sender. There are NO vehicle commands.
+     * The phone only knows the Comma's last validated telemetry; missing data
+     * must never be interpreted as a clear blind spot.
+     */
+    private fun startBlindspotTelemetryReadOnly() {
+        scope.launch {
+            while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+                val prefs = getSharedPreferences("drivebuddy_shadow", MODE_PRIVATE)
+                val enabled = prefs.getBoolean("blindspot_enabled", false)
+                val endpoint = prefs.getString("endpoint", "")?.trim().orEmpty()
+                val token = prefs.getString("token", "").orEmpty()
+                val configured = endpoint.endsWith("/v1/advisory") &&
+                    (endpoint.startsWith("http://") || endpoint.startsWith("https://")) &&
+                    token.length >= 16
+
+                if (!enabled || !configured) {
+                    TrackingState.shadowLeftBlindspot.value = null
+                    TrackingState.shadowRightBlindspot.value = null
+                    TrackingState.shadowBlindspotStatus.value =
+                        if (enabled) "Signal unavailable — receiver not configured" else "Off"
+                } else {
+                    val snapshot = runCatching {
+                        DriveBuddyShadowClient(endpoint, token).readBlindspots()
+                    }.getOrNull()
+                    TrackingState.shadowLeftBlindspot.value = snapshot?.leftOccupied
+                    TrackingState.shadowRightBlindspot.value = snapshot?.rightOccupied
+                    TrackingState.shadowBlindspotStatus.value =
+                        if (snapshot == null) "Signal unavailable — Comma data missing or stale"
+                        else "Receiving Comma blind-spot telemetry"
+                }
+                kotlinx.coroutines.delay(500L)
+            }
+        }
     }
 
     private fun beginUpdates() { if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) { stopSelf(); return }; val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2_000L).setMinUpdateDistanceMeters(5f).setMinUpdateIntervalMillis(1_000L).build(); client.requestLocationUpdates(request, callback, mainLooper) }
@@ -345,14 +479,14 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
             overSpeedAlertActive = true
             overSpeedSinceElapsedRealtime = null
             TrackingState.overSpeedActive.value = true
-            warningTone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 300)
             speak("Speed warning. $displayedActual in a $posted zone")
+            warningTone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 300)
         } else if (overSpeedAlertActive && displayedActual <= threshold - SPEED_RECOVERY_HYSTERESIS_KPH) {
             overSpeedAlertActive = false
             overSpeedSinceElapsedRealtime = null
             TrackingState.overSpeedActive.value = false
-            recoveryTone.startTone(ToneGenerator.TONE_PROP_ACK, 180)
             speak("Good")
+            recoveryTone.startTone(ToneGenerator.TONE_PROP_ACK, 180)
         }
     }
 
@@ -559,36 +693,71 @@ class DriveTrackingService : Service(), TextToSpeech.OnInitListener, SensorEvent
     private fun parseSpeed(note: String): Int? = Regex("\\b(20|30|40|50|60|70|80|90|100|110|120)\\b").find(note)?.groupValues?.getOrNull(1)?.toIntOrNull()
     private fun speak(text: String) {
         TrackingState.postDriverAlert(text)
+        if (Looper.myLooper() == Looper.getMainLooper()) enqueueSpeech(text)
+        else mainHandler.post { enqueueSpeech(text) }
+    }
+
+    private fun enqueueSpeech(text: String) {
+        if (speechDestroyed || speechInitFailed) return
         if (!ttsReady) {
             pendingSpeech += text
             return
         }
-        if (speechInProgress == 0) {
-            val wasMusicActive = audioManager.isMusicActive
-            if (wasMusicActive) {
-                audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PAUSE))
-                audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PAUSE))
-                musicPausedForPrompt = true
-            }
+        if (outstandingSpeech.isEmpty()) {
+            // Capture playback before any TTS audio begins; do not start idle players.
+            musicPausedForPrompt = audioManager.isMusicActive &&
+                dispatchMediaCommand(KeyEvent.KEYCODE_MEDIA_PAUSE)
         }
-        speechInProgress += 1
+        val id = "routecollector-" + (++nextSpeechId)
+        outstandingSpeech += id
+        armSpeechWatchdog()
         mainHandler.postDelayed({
-            val params = android.os.Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f) }
-            tts?.speak(text, TextToSpeech.QUEUE_ADD, params, "routecollector-" + System.currentTimeMillis())
+            if (speechDestroyed || id !in outstandingSpeech) return@postDelayed
+            val params = android.os.Bundle().apply {
+                putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+            }
+            val result = runCatching {
+                tts?.speak(text, TextToSpeech.QUEUE_ADD, params, id)
+            }.getOrNull()
+            // A synchronous failure does not necessarily deliver a TTS callback.
+            if (result != TextToSpeech.SUCCESS) completeSpeech(id)
         }, 250L)
     }
-    private fun resumeMusicAfterPrompt() {
-        speechInProgress = (speechInProgress - 1).coerceAtLeast(0)
-        if (speechInProgress > 0 || !musicPausedForPrompt) return
-        musicPausedForPrompt = false
-        mainHandler.post {
-            audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY))
-            audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PLAY))
+
+    private fun armSpeechWatchdog() {
+        mainHandler.removeCallbacks(speechWatchdog)
+        mainHandler.postDelayed(speechWatchdog, 45_000L)
+    }
+
+    private fun finishSpeech(id: String?) {
+        mainHandler.post { completeSpeech(id) }
+    }
+
+    private fun completeSpeech(id: String?) {
+        if (id == null || !outstandingSpeech.remove(id)) return
+        if (outstandingSpeech.isNotEmpty()) {
+            armSpeechWatchdog()
+            return
         }
+        mainHandler.removeCallbacks(speechWatchdog)
+        restoreInterruptedMusic()
+    }
+
+    private fun dispatchMediaCommand(keyCode: Int): Boolean = runCatching {
+        audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+        audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+    }.onFailure {
+        Log.w("RouteCollectorSpeech", "Media key dispatch failed", it)
+    }.isSuccess
+
+    private fun restoreInterruptedMusic() {
+        if (!musicPausedForPrompt) return
+        musicPausedForPrompt = false
+        dispatchMediaCommand(KeyEvent.KEYCODE_MEDIA_PLAY)
     }
     private fun stopTracking() { client.removeLocationUpdates(callback); val id = driveId; if (id != null) TrackingState.completedDriveId.value = id; if (id != null) scope.launch { dao.getDrive(id)?.let { dao.updateDrive(it.copy(endedAt = System.currentTimeMillis())) }; runCatching { RouteDataExporter.exportToDownloads(this@DriveTrackingService, dao, automatic = true) }.onFailure { Log.e("RouteCollectorBackup", "Automatic route backup failed", it) } }; driveId = null; currentSpeedLimit = null; overSpeedAlertActive = false; noMovementSinceElapsedRealtime = null; noMovementAnchor = null; previousMarkerDistances.clear(); markerBearingCache.clear(); TrackingState.activeDriveId.value = null; TrackingState.currentPostedSpeed.value = null; TrackingState.currentSpeedIsCollected.value = false; TrackingState.latestSpeedKph.value = null; TrackingState.latestBearingDegrees.value = null; TrackingState.activeZoneKinds.value = emptySet(); TrackingState.activeRoadAlerts.value = emptySet(); TrackingState.overSpeedActive.value = false; TrackingState.walkingAutoStopSeconds.value = null; TrackingState.hardBrakeActive.value = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     private fun createChannel() { getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL_ID, "Drive tracking", NotificationManager.IMPORTANCE_LOW)) }
     private fun buildNotification() = NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(android.R.drawable.ic_menu_mylocation).setContentTitle("Route Collector is recording").setContentText("GPS recording and route alerts are active").setOngoing(true).setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
-    override fun onDestroy() { sensorManager.unregisterListener(this); client.removeLocationUpdates(callback); mainHandler.removeCallbacksAndMessages(null); tts?.stop(); tts?.shutdown(); scope.cancel(); super.onDestroy() }
+    override fun onDestroy() { sensorManager.unregisterListener(this); client.removeLocationUpdates(callback); speechDestroyed = true; mainHandler.removeCallbacksAndMessages(null); pendingSpeech.clear(); outstandingSpeech.clear(); tts?.stop(); tts?.shutdown(); restoreInterruptedMusic(); scope.cancel(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 }
